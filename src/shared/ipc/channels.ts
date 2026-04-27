@@ -1,0 +1,14 @@
+export const IPC_CHANNELS = {
+  createNotebook: 'notebook:create',
+  menuAction: 'menu:action',
+  openNotebook: 'notebook:open',
+  openNotebookAtPath: 'notebook:openAtPath',
+  exportNotebookPdf: 'notebook:exportPdf',
+  saveNotebook: 'notebook:save',
+  saveNotebookAs: 'notebook:saveAs',
+  listRecentFiles: 'recent-files:list',
+} as const
+
+export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]
+
+export type FileMenuAction = 'new' | 'open' | 'save' | 'saveAs' | 'exportPdf'
