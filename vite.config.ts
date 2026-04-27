@@ -26,4 +26,9 @@ export default defineConfig({
         : {},
     }),
   ],
+  resolve: {
+    alias: {
+      'mathquill-css': path.resolve(__dirname, 'node_modules/mathquill/build/mathquill.css'),
+    },
+  },
 })

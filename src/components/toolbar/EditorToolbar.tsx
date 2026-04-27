@@ -1,13 +1,3 @@
-import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND } from '@lexical/list'
-import { $createHeadingNode } from '@lexical/rich-text'
-import { $setBlocksType } from '@lexical/selection'
-import {
-  $createParagraphNode,
-  $getSelection,
-  $isRangeSelection,
-  FORMAT_TEXT_COMMAND,
-  type LexicalEditor,
-} from 'lexical'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faFile,
@@ -15,39 +5,36 @@ import {
   faFloppyDisk,
   faFileArrowDown,
   faFilePdf,
-  faBold,
-  faItalic,
-  faUnderline,
-  faCode,
-  faListUl,
-  faListOl,
-  faParagraph,
+  faFont,
+  faSquareRootVariable,
+  faSuperscript,
+  faSubscript,
 } from '@fortawesome/free-solid-svg-icons'
 
-import type { NotebookCellKind } from '../../shared/types/notebook'
-
 interface EditorToolbarProps {
-  activeEditor: LexicalEditor | null
-  activeCellKind: NotebookCellKind | null
-  activeMathDisplayMode: boolean
+  hasActiveCell: boolean
   canSave: boolean
   isDirty: boolean
   title: string
-  onApplyMathFormat: (format: 'bold' | 'italic' | 'underline') => void
-  onInsertSnippet: (snippet: string) => void
+  onInsertSnippet: (snippet: string, mode?: 'cmd' | 'write') => void
   onNewNotebook: () => void
   onOpenNotebook: () => void
   onExportPdf: () => void
   onSaveNotebook: () => void
   onSaveNotebookAs: () => void
-  onToggleMathDisplay: () => void
   onTitleChange: (title: string) => void
 }
 
 interface SymbolItem {
   display: string
+  /** The LaTeX string to insert */
   value: string
   title: string
+  /**
+   * 'cmd'  → MathQuill structural command (e.g. \frac creates a fraction with empty slots).
+   * 'write' → MathQuill write (inserts literal LaTeX — symbols, operators, etc.).
+   */
+  mode: 'cmd' | 'write'
 }
 
 interface SymbolGroup {
@@ -59,184 +46,149 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
   {
     label: 'Structures',
     items: [
-      { display: 'a/b', value: '\\frac{#@}{#0}', title: 'Fraction' },
-      { display: '√', value: '\\sqrt{#@}', title: 'Square root' },
-      { display: 'x²', value: '^{2}', title: 'Squared' },
-      { display: 'xⁿ', value: '^{#0}', title: 'Power' },
-      { display: 'xₙ', value: '_{#0}', title: 'Subscript' },
-      { display: '∫', value: '\\int_{#0}^{#0}', title: 'Integral' },
-      { display: '∑', value: '\\sum_{#0}^{#0}', title: 'Summation' },
-      { display: '∏', value: '\\prod_{#0}^{#0}', title: 'Product' },
-      { display: '|x|', value: '\\left|#@\\right|', title: 'Absolute value' },
-      { display: '()', value: '\\left(#0\\right)', title: 'Parentheses' },
-      { display: '[]', value: '\\left[#0\\right]', title: 'Brackets' },
-      { display: 'lim', value: '\\lim_{#0}', title: 'Limit' },
+      { display: 'a/b', value: '\\frac', title: 'Fraction — creates a fraction with empty numerator and denominator', mode: 'cmd' },
+      { display: '√', value: '\\sqrt', title: 'Square root — type inside the radical', mode: 'cmd' },
+      { display: 'x²', value: '^2', title: 'Squared', mode: 'write' },
+      { display: 'xⁿ', value: '^{ }', title: 'Power / Exponent — type the exponent', mode: 'write' },
+      { display: 'xₙ', value: '_{ }', title: 'Subscript — type the subscript', mode: 'write' },
+      { display: '∫', value: '\\int', title: 'Integral', mode: 'cmd' },
+      { display: '∑', value: '\\sum', title: 'Summation', mode: 'cmd' },
+      { display: '∏', value: '\\prod', title: 'Product', mode: 'cmd' },
+      { display: '|x|', value: '\\left|\\right|', title: 'Absolute value', mode: 'write' },
+      { display: '()', value: '\\left(\\right)', title: 'Parentheses', mode: 'write' },
+      { display: '[]', value: '\\left[\\right]', title: 'Brackets', mode: 'write' },
+      { display: 'lim', value: '\\lim', title: 'Limit', mode: 'cmd' },
+      { display: '{ }', value: '\\lbrace\\rbrace', title: 'Curly braces', mode: 'write' },
+    ],
+  },
+  {
+    label: 'Text',
+    items: [
+      { display: 'Abc', value: '\\text', title: 'Plain text — type regular words', mode: 'cmd' },
     ],
   },
   {
     label: 'Relations',
     items: [
-      { display: '≠', value: '\\ne ', title: 'Not equal' },
-      { display: '≤', value: '\\le ', title: 'Less or equal' },
-      { display: '≥', value: '\\ge ', title: 'Greater or equal' },
-      { display: '≈', value: '\\approx ', title: 'Approximately' },
-      { display: '∝', value: '\\propto ', title: 'Proportional to' },
-      { display: '±', value: '\\pm ', title: 'Plus or minus' },
-      { display: '×', value: '\\times ', title: 'Times' },
-      { display: '÷', value: '\\div ', title: 'Divide' },
-      { display: '·', value: '\\cdot ', title: 'Dot product' },
+      { display: '=', value: '=', title: 'Equals', mode: 'write' },
+      { display: '≠', value: '\\ne', title: 'Not equal', mode: 'cmd' },
+      { display: '≤', value: '\\le', title: 'Less or equal', mode: 'cmd' },
+      { display: '≥', value: '\\ge', title: 'Greater or equal', mode: 'cmd' },
+      { display: '≈', value: '\\approx', title: 'Approximately', mode: 'cmd' },
+      { display: '∝', value: '\\propto', title: 'Proportional to', mode: 'cmd' },
+      { display: '±', value: '\\pm', title: 'Plus or minus', mode: 'cmd' },
+      { display: '×', value: '\\times', title: 'Times', mode: 'cmd' },
+      { display: '÷', value: '\\div', title: 'Divide', mode: 'cmd' },
+      { display: '·', value: '\\cdot', title: 'Dot product', mode: 'cmd' },
     ],
   },
   {
     label: 'Greek',
     items: [
-      { display: 'α', value: '\\alpha ', title: 'Alpha' },
-      { display: 'β', value: '\\beta ', title: 'Beta' },
-      { display: 'γ', value: '\\gamma ', title: 'Gamma' },
-      { display: 'δ', value: '\\delta ', title: 'Delta' },
-      { display: 'ε', value: '\\epsilon ', title: 'Epsilon' },
-      { display: 'ζ', value: '\\zeta ', title: 'Zeta' },
-      { display: 'θ', value: '\\theta ', title: 'Theta' },
-      { display: 'λ', value: '\\lambda ', title: 'Lambda' },
-      { display: 'μ', value: '\\mu ', title: 'Mu' },
-      { display: 'ξ', value: '\\xi ', title: 'Xi' },
-      { display: 'π', value: '\\pi ', title: 'Pi' },
-      { display: 'ρ', value: '\\rho ', title: 'Rho' },
-      { display: 'σ', value: '\\sigma ', title: 'Sigma' },
-      { display: 'τ', value: '\\tau ', title: 'Tau' },
-      { display: 'φ', value: '\\phi ', title: 'Phi' },
-      { display: 'χ', value: '\\chi ', title: 'Chi' },
-      { display: 'ψ', value: '\\psi ', title: 'Psi' },
-      { display: 'ω', value: '\\omega ', title: 'Omega' },
-      { display: 'Γ', value: '\\Gamma ', title: 'Gamma (upper)' },
-      { display: 'Δ', value: '\\Delta ', title: 'Delta (upper)' },
-      { display: 'Θ', value: '\\Theta ', title: 'Theta (upper)' },
-      { display: 'Λ', value: '\\Lambda ', title: 'Lambda (upper)' },
-      { display: 'Π', value: '\\Pi ', title: 'Pi (upper)' },
-      { display: 'Σ', value: '\\Sigma ', title: 'Sigma (upper)' },
-      { display: 'Φ', value: '\\Phi ', title: 'Phi (upper)' },
-      { display: 'Ψ', value: '\\Psi ', title: 'Psi (upper)' },
-      { display: 'Ω', value: '\\Omega ', title: 'Omega (upper)' },
+      { display: 'α', value: '\\alpha', title: 'Alpha', mode: 'cmd' },
+      { display: 'β', value: '\\beta', title: 'Beta', mode: 'cmd' },
+      { display: 'γ', value: '\\gamma', title: 'Gamma', mode: 'cmd' },
+      { display: 'δ', value: '\\delta', title: 'Delta', mode: 'cmd' },
+      { display: 'ε', value: '\\epsilon', title: 'Epsilon', mode: 'cmd' },
+      { display: 'ζ', value: '\\zeta', title: 'Zeta', mode: 'cmd' },
+      { display: 'θ', value: '\\theta', title: 'Theta', mode: 'cmd' },
+      { display: 'λ', value: '\\lambda', title: 'Lambda', mode: 'cmd' },
+      { display: 'μ', value: '\\mu', title: 'Mu', mode: 'cmd' },
+      { display: 'ξ', value: '\\xi', title: 'Xi', mode: 'cmd' },
+      { display: 'π', value: '\\pi', title: 'Pi', mode: 'cmd' },
+      { display: 'ρ', value: '\\rho', title: 'Rho', mode: 'cmd' },
+      { display: 'σ', value: '\\sigma', title: 'Sigma', mode: 'cmd' },
+      { display: 'τ', value: '\\tau', title: 'Tau', mode: 'cmd' },
+      { display: 'φ', value: '\\phi', title: 'Phi', mode: 'cmd' },
+      { display: 'χ', value: '\\chi', title: 'Chi', mode: 'cmd' },
+      { display: 'ψ', value: '\\psi', title: 'Psi', mode: 'cmd' },
+      { display: 'ω', value: '\\omega', title: 'Omega', mode: 'cmd' },
+      { display: 'Γ', value: '\\Gamma', title: 'Gamma (upper)', mode: 'cmd' },
+      { display: 'Δ', value: '\\Delta', title: 'Delta (upper)', mode: 'cmd' },
+      { display: 'Θ', value: '\\Theta', title: 'Theta (upper)', mode: 'cmd' },
+      { display: 'Λ', value: '\\Lambda', title: 'Lambda (upper)', mode: 'cmd' },
+      { display: 'Π', value: '\\Pi', title: 'Pi (upper)', mode: 'cmd' },
+      { display: 'Σ', value: '\\Sigma', title: 'Sigma (upper)', mode: 'cmd' },
+      { display: 'Φ', value: '\\Phi', title: 'Phi (upper)', mode: 'cmd' },
+      { display: 'Ψ', value: '\\Psi', title: 'Psi (upper)', mode: 'cmd' },
+      { display: 'Ω', value: '\\Omega', title: 'Omega (upper)', mode: 'cmd' },
     ],
   },
   {
-    label: 'Calculus & Analysis',
+    label: 'Calculus',
     items: [
-      { display: '∂', value: '\\partial ', title: 'Partial derivative' },
-      { display: '∇', value: '\\nabla ', title: 'Nabla / Del' },
-      { display: '∞', value: '\\infty ', title: 'Infinity' },
-      { display: '∮', value: '\\oint ', title: 'Contour integral' },
-      { display: '∬', value: '\\iint ', title: 'Double integral' },
-      { display: '∭', value: '\\iiint ', title: 'Triple integral' },
+      { display: '∂', value: '\\partial', title: 'Partial derivative', mode: 'cmd' },
+      { display: '∇', value: '\\nabla', title: 'Nabla / Del', mode: 'cmd' },
+      { display: '∞', value: '\\infty', title: 'Infinity', mode: 'cmd' },
+      { display: 'dy/dx', value: '\\frac{dy}{dx}', title: 'Derivative', mode: 'write' },
+      { display: '∫ₐᵇ', value: '\\int_{ }^{ }', title: 'Definite integral — type the bounds', mode: 'write' },
     ],
   },
   {
     label: 'Sets & Logic',
     items: [
-      { display: '∈', value: '\\in ', title: 'Element of' },
-      { display: '∉', value: '\\notin ', title: 'Not element of' },
-      { display: '∅', value: '\\emptyset ', title: 'Empty set' },
-      { display: '⊂', value: '\\subset ', title: 'Subset' },
-      { display: '⊆', value: '\\subseteq ', title: 'Subset or equal' },
-      { display: '⊃', value: '\\supset ', title: 'Superset' },
-      { display: '∪', value: '\\cup ', title: 'Union' },
-      { display: '∩', value: '\\cap ', title: 'Intersection' },
-      { display: '∀', value: '\\forall ', title: 'For all' },
-      { display: '∃', value: '\\exists ', title: 'There exists' },
-      { display: '¬', value: '\\neg ', title: 'Logical not' },
-      { display: '∧', value: '\\wedge ', title: 'Logical and' },
-      { display: '∨', value: '\\vee ', title: 'Logical or' },
+      { display: '∈', value: '\\in', title: 'Element of', mode: 'cmd' },
+      { display: '∉', value: '\\notin', title: 'Not element of', mode: 'cmd' },
+      { display: '∅', value: '\\emptyset', title: 'Empty set', mode: 'cmd' },
+      { display: '⊂', value: '\\subset', title: 'Subset', mode: 'cmd' },
+      { display: '⊆', value: '\\subseteq', title: 'Subset or equal', mode: 'cmd' },
+      { display: '⊃', value: '\\supset', title: 'Superset', mode: 'cmd' },
+      { display: '∪', value: '\\cup', title: 'Union', mode: 'cmd' },
+      { display: '∩', value: '\\cap', title: 'Intersection', mode: 'cmd' },
+      { display: '∀', value: '\\forall', title: 'For all', mode: 'cmd' },
+      { display: '∃', value: '\\exists', title: 'There exists', mode: 'cmd' },
+      { display: '¬', value: '\\neg', title: 'Logical not', mode: 'cmd' },
+      { display: '∧', value: '\\wedge', title: 'Logical and', mode: 'cmd' },
+      { display: '∨', value: '\\vee', title: 'Logical or', mode: 'cmd' },
     ],
   },
   {
     label: 'Arrows',
     items: [
-      { display: '→', value: '\\rightarrow ', title: 'Right arrow' },
-      { display: '←', value: '\\leftarrow ', title: 'Left arrow' },
-      { display: '↔', value: '\\leftrightarrow ', title: 'Both arrows' },
-      { display: '⇒', value: '\\Rightarrow ', title: 'Implies' },
-      { display: '⇐', value: '\\Leftarrow ', title: 'Implied by' },
-      { display: '⇔', value: '\\Leftrightarrow ', title: 'If and only if' },
-      { display: '↦', value: '\\mapsto ', title: 'Maps to' },
-      { display: '↑', value: '\\uparrow ', title: 'Up arrow' },
-      { display: '↓', value: '\\downarrow ', title: 'Down arrow' },
+      { display: '→', value: '\\rightarrow', title: 'Right arrow', mode: 'cmd' },
+      { display: '←', value: '\\leftarrow', title: 'Left arrow', mode: 'cmd' },
+      { display: '↔', value: '\\leftrightarrow', title: 'Both arrows', mode: 'cmd' },
+      { display: '⇒', value: '\\Rightarrow', title: 'Implies', mode: 'cmd' },
+      { display: '⇐', value: '\\Leftarrow', title: 'Implied by', mode: 'cmd' },
+      { display: '⇔', value: '\\Leftrightarrow', title: 'If and only if', mode: 'cmd' },
+      { display: '↦', value: '\\mapsto', title: 'Maps to', mode: 'cmd' },
     ],
   },
   {
     label: 'Functions',
     items: [
-      { display: 'sin', value: '\\sin ', title: 'Sine' },
-      { display: 'cos', value: '\\cos ', title: 'Cosine' },
-      { display: 'tan', value: '\\tan ', title: 'Tangent' },
-      { display: 'arcsin', value: '\\arcsin ', title: 'Arcsine' },
-      { display: 'arccos', value: '\\arccos ', title: 'Arccosine' },
-      { display: 'arctan', value: '\\arctan ', title: 'Arctangent' },
-      { display: 'ln', value: '\\ln ', title: 'Natural log' },
-      { display: 'log', value: '\\log ', title: 'Logarithm' },
-      { display: 'exp', value: '\\exp ', title: 'Exponential' },
-      { display: 'max', value: '\\max ', title: 'Maximum' },
-      { display: 'min', value: '\\min ', title: 'Minimum' },
-      { display: 'det', value: '\\det ', title: 'Determinant' },
-      { display: 'dim', value: '\\dim ', title: 'Dimension' },
+      { display: 'sin', value: '\\sin', title: 'Sine', mode: 'cmd' },
+      { display: 'cos', value: '\\cos', title: 'Cosine', mode: 'cmd' },
+      { display: 'tan', value: '\\tan', title: 'Tangent', mode: 'cmd' },
+      { display: 'log', value: '\\log', title: 'Logarithm', mode: 'cmd' },
+      { display: 'ln', value: '\\ln', title: 'Natural log', mode: 'cmd' },
+      { display: 'exp', value: '\\exp', title: 'Exponential', mode: 'cmd' },
+      { display: 'max', value: '\\max', title: 'Maximum', mode: 'cmd' },
+      { display: 'min', value: '\\min', title: 'Minimum', mode: 'cmd' },
+    ],
+  },
+  {
+    label: 'Matrices',
+    items: [
+      { display: '2×2', value: '\\begin{pmatrix} & \\\\\\ & \\end{pmatrix}', title: '2×2 Matrix', mode: 'write' },
+      { display: '3×3', value: '\\begin{pmatrix} & & \\\\\\ & & \\\\\\ & & \\end{pmatrix}', title: '3×3 Matrix', mode: 'write' },
     ],
   },
 ]
 
-function setBlockType(editor: LexicalEditor, blockType: 'paragraph' | 'h1' | 'h2') {
-  editor.update(() => {
-    const selection = $getSelection()
-
-    if (!$isRangeSelection(selection)) {
-      return
-    }
-
-    $setBlocksType(selection, () => {
-      if (blockType === 'paragraph') {
-        return $createParagraphNode()
-      }
-
-      return $createHeadingNode(blockType)
-    })
-  })
-}
-
-function dispatchFormat(editor: LexicalEditor | null, format: 'bold' | 'italic' | 'underline' | 'code') {
-  if (!editor) {
-    return
-  }
-
-  editor.dispatchCommand(FORMAT_TEXT_COMMAND, format)
-}
-
 export function EditorToolbar({
-  activeEditor,
-  activeCellKind,
-  activeMathDisplayMode,
+  hasActiveCell,
   canSave,
   isDirty,
   title,
-  onApplyMathFormat,
   onInsertSnippet,
   onExportPdf,
   onNewNotebook,
   onOpenNotebook,
   onSaveNotebook,
   onSaveNotebookAs,
-  onToggleMathDisplay,
   onTitleChange,
 }: EditorToolbarProps) {
-  const isMath = activeCellKind === 'math'
-  const isRichText = activeCellKind === 'rich-text'
-  const hasActiveCell = isMath || isRichText
-
-  const handleFormat = (format: 'bold' | 'italic' | 'underline' | 'code') => {
-    if (isMath && format !== 'code') {
-      onApplyMathFormat(format as 'bold' | 'italic' | 'underline')
-    } else {
-      dispatchFormat(activeEditor, format)
-    }
-  }
-
   return (
     <header className="editor-toolbar">
       <div className="toolbar-row toolbar-row-primary">
@@ -265,99 +217,59 @@ export function EditorToolbar({
         </div>
       </div>
       <div className="toolbar-row toolbar-row-contextual">
-        <div className="toolbar-symbols-scroll">
-          {/* Text formatting */}
+        <div className="toolbar-symbols-wrap">
+          {/* Quick-access structure buttons */}
           <div className="toolbar-group toolbar-group-bordered">
+            <span className="toolbar-group-label">Insert</span>
             <button
               type="button"
-              title="Bold"
+              title="Plain text — type regular words inside math"
               disabled={!hasActiveCell}
+              className="symbol-btn"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => handleFormat('bold')}
+              onClick={() => onInsertSnippet('\\text', 'cmd')}
             >
-              <FontAwesomeIcon icon={faBold} />
+              <FontAwesomeIcon icon={faFont} /> Abc
             </button>
             <button
               type="button"
-              title="Italic"
+              title="Fraction — creates numerator/denominator slots"
               disabled={!hasActiveCell}
+              className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => handleFormat('italic')}
+              onClick={() => onInsertSnippet('\\frac', 'cmd')}
             >
-              <FontAwesomeIcon icon={faItalic} />
+              a/b
             </button>
             <button
               type="button"
-              title="Underline"
+              title="Square root — type inside the radical"
               disabled={!hasActiveCell}
+              className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => handleFormat('underline')}
+              onClick={() => onInsertSnippet('\\sqrt', 'cmd')}
             >
-              <FontAwesomeIcon icon={faUnderline} />
+              <FontAwesomeIcon icon={faSquareRootVariable} />
             </button>
             <button
               type="button"
-              title="Code"
-              disabled={!isRichText}
+              title="Superscript / Power — type the exponent"
+              disabled={!hasActiveCell}
+              className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => handleFormat('code')}
+              onClick={() => onInsertSnippet('^{ }', 'write')}
             >
-              <FontAwesomeIcon icon={faCode} />
+              <FontAwesomeIcon icon={faSuperscript} />
             </button>
             <button
               type="button"
-              title="Bullet list"
-              disabled={!isRichText}
+              title="Subscript — type the subscript"
+              disabled={!hasActiveCell}
+              className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => activeEditor?.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined)}
+              onClick={() => onInsertSnippet('_{ }', 'write')}
             >
-              <FontAwesomeIcon icon={faListUl} />
-            </button>
-            <button
-              type="button"
-              title="Numbered list"
-              disabled={!isRichText}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => activeEditor?.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined)}
-            >
-              <FontAwesomeIcon icon={faListOl} />
-            </button>
-            <button
-              type="button"
-              title="Paragraph"
-              disabled={!isRichText}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => activeEditor && setBlockType(activeEditor, 'paragraph')}
-            >
-              <FontAwesomeIcon icon={faParagraph} />
-            </button>
-            <button
-              type="button"
-              title="Heading 1"
-              disabled={!isRichText}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => activeEditor && setBlockType(activeEditor, 'h1')}
-            >
-              H1
-            </button>
-            <button
-              type="button"
-              title="Heading 2"
-              disabled={!isRichText}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => activeEditor && setBlockType(activeEditor, 'h2')}
-            >
-              H2
-            </button>
-            <button
-              type="button"
-              title={activeMathDisplayMode ? 'Switch to inline math' : 'Switch to display math'}
-              disabled={!isMath}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onToggleMathDisplay}
-              className="display-toggle-btn"
-            >
-              {activeMathDisplayMode ? '⊡ Block' : '⊟ Inline'}
+              <FontAwesomeIcon icon={faSubscript} />
             </button>
           </div>
 
@@ -370,10 +282,10 @@ export function EditorToolbar({
                   key={item.title}
                   type="button"
                   title={item.title}
-                  disabled={!isMath}
+                  disabled={!hasActiveCell}
                   className="symbol-btn"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onInsertSnippet(item.value)}
+                  onClick={() => onInsertSnippet(item.value, item.mode)}
                 >
                   {item.display}
                 </button>
@@ -381,7 +293,7 @@ export function EditorToolbar({
             </div>
           ))}
         </div>
-        {!hasActiveCell ? <p className="toolbar-hint">Select a cell to reveal formatting and symbol tools.</p> : null}
+        {!hasActiveCell ? <p className="toolbar-hint">Click a cell to start editing. Use the buttons above to insert math symbols and structures.</p> : null}
       </div>
     </header>
   )

@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import type { LexicalEditor } from 'lexical'
 
 import { NotebookEditor } from './components/notebook/NotebookEditor'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
+import type { CellInsertHandle } from './components/cell/CellEditor'
+
 import './App.css'
 import { renderPrintableNotebook } from './print/renderPrintableNotebook'
 import { parseNotebookFromLatex } from './serialization/latexParser'
 import { serializeNotebookToLatex } from './serialization/latexSerializer'
 import type { FileMenuAction } from './shared/ipc/channels'
 import {
-  createMathNotebookCell,
+  createNotebookCell,
   type NotebookCell,
-  type NotebookCellKind,
   type NotebookDocument,
   type RecentFileEntry,
 } from './shared/types/notebook'
-import type { MathFieldElementLike } from './components/math/MathCellEditor'
 
 
 
@@ -81,14 +80,10 @@ function App() {
   const [isBootstrapped, setIsBootstrapped] = useState(false)
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
-  const [activeEditor, setActiveEditor] = useState<LexicalEditor | null>(null)
   const [documentRevision, setDocumentRevision] = useState(0)
-  const activeMathFieldRef = useRef<MathFieldElementLike | null>(null)
+  const activeCellHandleRef = useRef<CellInsertHandle | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [statusMessage, setStatusMessage] = useState('Loading notebook workspace...')
-
-  const activeCell = document?.cells.find((cell) => cell.id === activeCellId) ?? null
-  const activeCellKind = activeCell?.kind ?? null
 
   useEffect(() => {
     void (async () => {
@@ -145,7 +140,6 @@ function App() {
     setFilePath(nextPath)
     setDocumentRevision((current) => current + 1)
     setActiveCellId(nextDocument.cells[0]?.id ?? null)
-    setActiveEditor(null)
     setIsDirty(false)
   }
 
@@ -250,41 +244,37 @@ function App() {
     })
   }
 
-  const activateCell = (cellId: string, kind: NotebookCellKind, editor: LexicalEditor | null) => {
-    setActiveCellId(cellId)
-    setActiveEditor(kind === 'rich-text' ? editor : null)
-  }
-
-  const handleCellChange = (cellId: string, updater: (cell: NotebookCell) => NotebookCell) => {
+  const handleCellChange = (cellId: string, cell: NotebookCell) => {
     updateDocument((current) => ({
       ...current,
-      cells: current.cells.map((cell) => (cell.id === cellId ? updater(cell) : cell)),
+      cells: current.cells.map((c) => (c.id === cellId ? cell : c)),
     }))
   }
 
   const handleMoveCell = (sourceCellId: string, targetCellId: string) => {
-    if (!document || sourceCellId === targetCellId) {
-      return
-    }
-
-    const sourceIndex = document.cells.findIndex((cell) => cell.id === sourceCellId)
-    const targetIndex = document.cells.findIndex((cell) => cell.id === targetCellId)
-
-    if (sourceIndex < 0 || targetIndex < 0) {
-      return
-    }
-
-    const nextCells = [...document.cells]
-    const [movedCell] = nextCells.splice(sourceIndex, 1)
-    nextCells.splice(targetIndex, 0, movedCell)
-
-    setDocument({
-      ...document,
-      cells: nextCells,
-    })
     setActiveCellId(sourceCellId)
-    setActiveEditor(null)
-    setIsDirty(true)
+    
+    updateDocument((current) => {
+      if (sourceCellId === targetCellId) {
+        return current
+      }
+
+      const sourceIndex = current.cells.findIndex((cell) => cell.id === sourceCellId)
+      const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
+
+      if (sourceIndex < 0 || targetIndex < 0) {
+        return current
+      }
+
+      const nextCells = [...current.cells]
+      const [movedCell] = nextCells.splice(sourceIndex, 1)
+      nextCells.splice(targetIndex, 0, movedCell)
+
+      return {
+        ...current,
+        cells: nextCells,
+      }
+    })
   }
 
   const handleRemoveCell = (cellId: string) => {
@@ -292,77 +282,53 @@ function App() {
       return
     }
 
+    // Pre-calculate active cell id based on current closure state.
+    // Focus the cell before the deleted one, or the first cell
     const nextCells = document.cells.filter((cell) => cell.id !== cellId)
-    const safeCells = nextCells.length > 0 ? nextCells : [createMathNotebookCell()]
-    const nextActiveCell = safeCells.find((cell) => cell.id !== cellId) ?? safeCells[0] ?? null
+    const safeCells = nextCells.length > 0 ? nextCells : [createNotebookCell()]
+    const deletedIndex = document.cells.findIndex((c) => c.id === cellId)
+    const nextFocusIndex = Math.max(0, Math.min(deletedIndex, safeCells.length - 1))
+    
+    setActiveCellId(safeCells[nextFocusIndex]?.id ?? null)
 
-    setDocument({
-      ...document,
-      cells: safeCells,
-    })
-    setActiveCellId(nextActiveCell?.id ?? null)
-    setActiveEditor(null)
-    setIsDirty(true)
-  }
-
-  const handleAddCell = (targetCellId: string, position: 'above' | 'below') => {
-    if (!document) {
-      return
-    }
-
-    const targetIndex = document.cells.findIndex((cell) => cell.id === targetCellId)
-
-    if (targetIndex < 0) {
-      return
-    }
-
-    const nextCell = createMathNotebookCell()
-    const insertionIndex = position === 'above' ? targetIndex : targetIndex + 1
-    const nextCells = [...document.cells]
-    nextCells.splice(insertionIndex, 0, nextCell)
-
-    setDocument({
-      ...document,
-      cells: nextCells,
-    })
-    setActiveCellId(nextCell.id)
-    setActiveEditor(null)
-    setIsDirty(true)
-  }
-
-  const handleApplyMathFormat = (format: 'bold' | 'italic' | 'underline') => {
-    if (!activeMathFieldRef.current) {
-      return
-    }
-
-    const template =
-      format === 'bold' ? '\\mathbf{#@}' : format === 'italic' ? '\\mathit{#@}' : '\\underline{#@}'
-    activeMathFieldRef.current.insert(template)
-  }
-
-  const handleInsertMathSnippet = (snippet: string) => {
-    if (!activeMathFieldRef.current) {
-      return
-    }
-
-    activeMathFieldRef.current.insert(snippet)
-  }
-
-  const handleToggleMathDisplay = () => {
-    if (!activeCell || activeCell.kind !== 'math') {
-      return
-    }
-
-    handleCellChange(activeCell.id, (cell) => {
-      if (cell.kind !== 'math') {
-        return cell
+    updateDocument((current) => {
+      const currentNextCells = current.cells.filter((cell) => cell.id !== cellId)
+      const currentSafeCells = currentNextCells.length > 0 ? currentNextCells : safeCells
+      
+      return {
+        ...current,
+        cells: currentSafeCells,
       }
+    })
+  }
+
+  const handleAddCellBelow = (targetCellId: string) => {
+    const nextCell = createNotebookCell()
+    setActiveCellId(nextCell.id)
+
+    updateDocument((current) => {
+      const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
+
+      if (targetIndex < 0) {
+        return current
+      }
+
+      const nextCells = [...current.cells]
+      nextCells.splice(targetIndex + 1, 0, nextCell)
 
       return {
-        ...cell,
-        displayMode: !cell.displayMode,
+        ...current,
+        cells: nextCells,
       }
     })
+  }
+
+  const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write') => {
+    activeCellHandleRef.current?.insert(snippet, mode)
+  }
+
+  const handleFocusCell = (cellId: string) => {
+    setActiveCellId(cellId)
   }
 
   if (!isBootstrapped) {
@@ -383,11 +349,8 @@ function App() {
   return (
     <main className="app-shell">
       <EditorToolbar
-        activeEditor={activeEditor}
-        activeCellKind={activeCellKind}
-        activeMathDisplayMode={activeCell?.kind === 'math' ? activeCell.displayMode : false}
-        onApplyMathFormat={handleApplyMathFormat}
-        onInsertSnippet={handleInsertMathSnippet}
+        hasActiveCell={activeCellId !== null}
+        onInsertSnippet={handleInsertSnippet}
         canSave={Boolean(document)}
         isDirty={isDirty}
         title={document.metadata.title}
@@ -396,7 +359,6 @@ function App() {
         onOpenNotebook={handleOpenNotebook}
         onSaveNotebook={() => void persistDocument(false)}
         onSaveNotebookAs={() => void persistDocument(true)}
-        onToggleMathDisplay={handleToggleMathDisplay}
         onTitleChange={(title) => {
           updateDocument((current) => ({
             ...current,
@@ -416,12 +378,13 @@ function App() {
           activeCellId={activeCellId}
           document={document}
           documentRevision={documentRevision}
-          onActivateCell={activateCell}
-          onAddCell={handleAddCell}
+          onActivateCell={handleFocusCell}
+          onAddCellBelow={handleAddCellBelow}
           onCellChange={handleCellChange}
-          onMathFieldReady={(field) => { activeMathFieldRef.current = field }}
+          onInsertHandleReady={(handle) => { activeCellHandleRef.current = handle }}
           onMoveCell={handleMoveCell}
           onRemoveCell={handleRemoveCell}
+          onFocusCell={handleFocusCell}
         />
       </section>
     </main>

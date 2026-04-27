@@ -1,7 +1,5 @@
 /// <reference types="vite/client" />
 
-import type * as React from 'react'
-
 import type { FileMenuAction } from './shared/ipc/channels'
 import type { NotebookDocument, RecentFileEntry, StoredNotebookFile } from './shared/types/notebook'
 
@@ -17,19 +15,13 @@ declare global {
 			saveNotebookAs: (file: { title: string; content: string }) => Promise<{ path: string } | null>
 			listRecentFiles: () => Promise<RecentFileEntry[]>
 		}
-		mathVirtualKeyboard?: {
-			show: () => void
-			hide: () => void
-		}
-	}
-
-	namespace JSX {
-		interface IntrinsicElements {
-			'math-field': React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
-				children?: React.ReactNode
-			}
-		}
+		jQuery: unknown
+		MathQuill: unknown
 	}
 }
+
+// Declare modules without types
+declare module 'mathquill/build/mathquill.js'
+declare module 'mathquill/build/mathquill.css'
 
 export {}

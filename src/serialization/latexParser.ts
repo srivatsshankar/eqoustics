@@ -1,17 +1,15 @@
 import { createEmptyNotebookDocument, type NotebookDocument, type NotebookCell } from '../shared/types/notebook'
 
-// Current format: single marker comment followed by content lines until the next marker
+// Current format: % @cell <id> followed by $$latex$$
+const CELL_MARKER = /^% @cell ([^\s]+)$/
+
+// Legacy formats for backward compatibility
 const RT_MARKER = /^% @rt ([^\s]+) (.+)$/
 const MATH_MARKER = /^% @math ([^\s]+) (true|false)$/
-
-// Legacy format (files saved before the line-based format)
 const LEGACY_CELL_PATTERN = /% eqoustics-cell: (rich-text|math) id=([^\s]+)(?: display=(true|false))?\n([\s\S]*?)% end-eqoustics-cell/g
 const TITLE_PATTERN = /^%! title=(.*)$/m
 const CREATED_AT_PATTERN = /^%! createdAt=(.*)$/m
 const UPDATED_AT_PATTERN = /^%! updatedAt=(.*)$/m
-
-// Legacy: lexical state embedded as % eqoustics-lexical: <base64>
-const LEGACY_LEXICAL_STATE_PATTERN = /^% eqoustics-lexical: (.*)$/m
 
 function decodeBase64ToUtf8(value: string): string {
   const binary = atob(value)
@@ -19,61 +17,22 @@ function decodeBase64ToUtf8(value: string): string {
   return new TextDecoder().decode(bytes)
 }
 
-function createParagraphLexicalState(text: string): string {
-  const normalized = text.replace(/\\[a-zA-Z]+\{?|[{}]/g, '').replace(/\s+/g, ' ').trim()
-
-  return JSON.stringify({
-    root: {
-      children: [
-        {
-          children: normalized
-            ? [
-                {
-                  detail: 0,
-                  format: 0,
-                  mode: 'normal',
-                  style: '',
-                  text: normalized,
-                  type: 'text',
-                  version: 1,
-                },
-              ]
-            : [],
-          direction: null,
-          format: '',
-          indent: 0,
-          type: 'paragraph',
-          version: 1,
-        },
-      ],
-      direction: null,
-      format: '',
-      indent: 0,
-      type: 'root',
-      version: 1,
-    },
-  })
-}
-
-function parseLegacyCellBody(kind: string, id: string, displayFlag: string | undefined, rawBody: string): NotebookCell {
-  const body = rawBody.trim()
-
-  if (kind === 'math') {
-    const latex = body.replace(/^\\\[/, '').replace(/\\\]$/, '').replace(/^\$/, '').replace(/\$$/, '').trim()
-    return {
-      id,
-      kind: 'math',
-      latex,
-      displayMode: displayFlag === 'true',
+/**
+ * Extract plain text from a Lexical JSON state for migration to unified cells.
+ */
+function extractTextFromLexicalState(base64: string): string {
+  try {
+    const json = decodeBase64ToUtf8(base64)
+    const parsed = JSON.parse(json) as { root: { children: Array<{ children?: Array<{ text?: string }> }> } }
+    const texts: string[] = []
+    for (const block of parsed.root.children ?? []) {
+      for (const inline of block.children ?? []) {
+        if (inline.text) texts.push(inline.text)
+      }
     }
-  }
-
-  const lexicalMatch = body.match(LEGACY_LEXICAL_STATE_PATTERN)
-
-  return {
-    id,
-    kind: 'rich-text',
-    lexicalState: lexicalMatch ? decodeBase64ToUtf8(lexicalMatch[1]) : createParagraphLexicalState(body),
+    return texts.join(' ').trim()
+  } catch {
+    return ''
   }
 }
 
@@ -82,59 +41,84 @@ function parseCellsFromLines(normalized: string): NotebookCell[] {
   const cells: NotebookCell[] = []
 
   type PendingCell =
-    | { kind: 'rich-text'; id: string; base64: string; contentLines: string[] }
-    | { kind: 'math'; id: string; displayMode: boolean; contentLines: string[] }
+    | { format: 'v2'; id: string; contentLines: string[] }
+    | { format: 'rt'; id: string; base64: string; contentLines: string[] }
+    | { format: 'math'; id: string; displayMode: boolean; contentLines: string[] }
 
   let pending: PendingCell | null = null
 
   const flush = () => {
-    if (!pending) {
-      return
-    }
+    if (!pending) return
 
     const content = pending.contentLines.join('\n').trim()
 
-    if (pending.kind === 'math') {
+    if (pending.format === 'v2') {
+      // Strip $$ wrappers
+      const latex = content.replace(/^\$\$/, '').replace(/\$\$$/, '').trim()
+      cells.push({ id: pending.id, latex })
+    } else if (pending.format === 'math') {
       const latex = content
         .replace(/^\\\[/, '')
         .replace(/\\\]$/, '')
         .replace(/^\$/, '')
         .replace(/\$$/, '')
         .trim()
-
-      cells.push({
-        id: pending.id,
-        kind: 'math',
-        latex,
-        displayMode: pending.displayMode,
-      })
+      cells.push({ id: pending.id, latex })
     } else {
-      cells.push({
-        id: pending.id,
-        kind: 'rich-text',
-        lexicalState: pending.base64 ? decodeBase64ToUtf8(pending.base64) : createParagraphLexicalState(content),
-      })
+      // rich-text: extract text content and wrap in \text{}
+      const text = pending.base64 ? extractTextFromLexicalState(pending.base64) : content
+      cells.push({ id: pending.id, latex: text ? `\\text{${text}}` : '' })
     }
 
     pending = null
   }
 
   for (const line of lines) {
+    const cellMatch = line.match(CELL_MARKER)
     const rtMatch = line.match(RT_MARKER)
     const mathMatch = line.match(MATH_MARKER)
 
-    if (rtMatch) {
+    if (cellMatch) {
       flush()
-      pending = { kind: 'rich-text', id: rtMatch[1], base64: rtMatch[2], contentLines: [] }
+      pending = { format: 'v2', id: cellMatch[1], contentLines: [] }
+    } else if (rtMatch) {
+      flush()
+      pending = { format: 'rt', id: rtMatch[1], base64: rtMatch[2], contentLines: [] }
     } else if (mathMatch) {
       flush()
-      pending = { kind: 'math', id: mathMatch[1], displayMode: mathMatch[2] === 'true', contentLines: [] }
+      pending = { format: 'math', id: mathMatch[1], displayMode: mathMatch[2] === 'true', contentLines: [] }
     } else if (pending && line !== '\\end{document}' && !line.startsWith('%! ')) {
       pending.contentLines.push(line)
     }
   }
 
   flush()
+  return cells
+}
+
+function parseLegacyCells(normalized: string): NotebookCell[] {
+  const cells: NotebookCell[] = []
+
+  for (const match of normalized.matchAll(LEGACY_CELL_PATTERN)) {
+    const kind = match[1]
+    const id = match[2]
+    const body = match[4].trim()
+
+    if (kind === 'math') {
+      const latex = body
+        .replace(/^\\\[/, '')
+        .replace(/\\\]$/, '')
+        .replace(/^\$/, '')
+        .replace(/\$$/, '')
+        .trim()
+      cells.push({ id, latex })
+    } else {
+      // Rich text — strip LaTeX commands to get plain text, wrap in \text{}
+      const plainText = body.replace(/\\[a-zA-Z]+\{?|[{}]/g, '').replace(/\s+/g, ' ').trim()
+      cells.push({ id, latex: plainText ? `\\text{${plainText}}` : '' })
+    }
+  }
+
   return cells
 }
 
@@ -154,9 +138,7 @@ export function parseNotebookFromLatex(content: string, fallbackTitle?: string):
 
   // Fall back to the legacy block format for files saved before the format change
   if (cells.length === 0) {
-    for (const match of normalized.matchAll(LEGACY_CELL_PATTERN)) {
-      cells.push(parseLegacyCellBody(match[1], match[2], match[3], match[4]))
-    }
+    cells = parseLegacyCells(normalized)
   }
 
   document.cells = cells.length > 0 ? cells : document.cells

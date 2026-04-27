@@ -1,23 +1,21 @@
 import { useRef } from 'react'
-
-import type { LexicalEditor } from 'lexical'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons'
 
-import { MathCellEditor, type MathFieldElementLike } from '../math/MathCellEditor'
-import { RichTextCellEditor } from './RichTextCellEditor'
-import type { NotebookCell, NotebookCellKind, NotebookDocument } from '../../shared/types/notebook'
+import { CellEditor, type CellInsertHandle } from '../cell/CellEditor'
+import type { NotebookCell, NotebookDocument } from '../../shared/types/notebook'
 
 interface NotebookEditorProps {
   activeCellId: string | null
   document: NotebookDocument
   documentRevision: number
-  onActivateCell: (cellId: string, kind: NotebookCellKind, editor: LexicalEditor | null) => void
-  onAddCell: (cellId: string, position: 'above' | 'below') => void
-  onCellChange: (cellId: string, updater: (cell: NotebookCell) => NotebookCell) => void
-  onMathFieldReady?: (field: MathFieldElementLike) => void
+  onActivateCell: (cellId: string) => void
+  onAddCellBelow: (cellId: string) => void
+  onCellChange: (cellId: string, cell: NotebookCell) => void
+  onInsertHandleReady: (handle: CellInsertHandle) => void
   onMoveCell: (sourceCellId: string, targetCellId: string) => void
   onRemoveCell: (cellId: string) => void
+  onFocusCell: (cellId: string) => void
 }
 
 export function NotebookEditor({
@@ -25,16 +23,27 @@ export function NotebookEditor({
   document,
   documentRevision,
   onActivateCell,
-  onAddCell,
+  onAddCellBelow,
   onCellChange,
-  onMathFieldReady,
+  onInsertHandleReady,
   onMoveCell,
   onRemoveCell,
+  onFocusCell,
 }: NotebookEditorProps) {
   const draggedCellId = useRef<string | null>(null)
 
+  const getPreviousCellId = (cellId: string): string | null => {
+    const idx = document.cells.findIndex((c) => c.id === cellId)
+    return idx > 0 ? document.cells[idx - 1].id : null
+  }
+
+  const getNextCellId = (cellId: string): string | null => {
+    const idx = document.cells.findIndex((c) => c.id === cellId)
+    return idx >= 0 && idx < document.cells.length - 1 ? document.cells[idx + 1].id : null
+  }
+
   return (
-    <div className="notebook-editor">
+    <div className="notebook-editor" key={documentRevision}>
       {document.cells.map((cell) => (
         <section
           key={cell.id}
@@ -47,14 +56,9 @@ export function NotebookEditor({
             event.preventDefault()
             const srcId = draggedCellId.current
             draggedCellId.current = null
-
-            if (!srcId || srcId === cell.id) {
-              return
-            }
-
+            if (!srcId || srcId === cell.id) return
             onMoveCell(srcId, cell.id)
           }}
-          onPointerDownCapture={() => onActivateCell(cell.id, cell.kind, null)}
         >
           <div className="cell-gutter">
             <button
@@ -67,59 +71,51 @@ export function NotebookEditor({
                 event.dataTransfer.effectAllowed = 'move'
                 event.dataTransfer.setData('text/plain', cell.id)
               }}
-              onDragEnd={() => {
-                draggedCellId.current = null
-              }}
+              onDragEnd={() => { draggedCellId.current = null }}
             >
               <FontAwesomeIcon icon={faGripVertical} />
             </button>
-            <details className="cell-menu">
-              <summary className="cell-icon-button" title="Add cell">
-                <FontAwesomeIcon icon={faPlus} />
-              </summary>
-              <div className="cell-menu-panel">
-                <button type="button" onClick={() => onAddCell(cell.id, 'above')}>
-                  Add cell above
-                </button>
-                <button type="button" onClick={() => onAddCell(cell.id, 'below')}>
-                  Add cell below
-                </button>
-              </div>
-            </details>
-            <button type="button" className="cell-icon-button danger-button" title="Delete cell" onClick={() => onRemoveCell(cell.id)}>
+            <button
+              type="button"
+              className="cell-icon-button"
+              title="Add cell below"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onAddCellBelow(cell.id)}
+            >
+              <FontAwesomeIcon icon={faPlus} />
+            </button>
+            <button
+              type="button"
+              className="cell-icon-button danger-button"
+              title="Delete cell"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onRemoveCell(cell.id)}
+            >
               <FontAwesomeIcon icon={faTrash} />
             </button>
           </div>
           <div className="cell-content">
-            {cell.kind === 'math' ? (
-              <MathCellEditor
-                cell={cell}
-                onActivate={() => onActivateCell(cell.id, 'math', null)}
-                onChange={(nextCell) => {
-                  onCellChange(cell.id, () => nextCell)
-                  onActivateCell(cell.id, 'math', null)
-                }}
-                onFieldReady={onMathFieldReady}
-              />
-            ) : (
-              <RichTextCellEditor
-                cell={cell}
-                documentRevision={documentRevision}
-                onActivateEditor={(editor) => onActivateCell(cell.id, 'rich-text', editor)}
-                onChange={(nextState) => {
-                  onCellChange(cell.id, (currentCell) => {
-                    if (currentCell.kind !== 'rich-text') {
-                      return currentCell
-                    }
-
-                    return {
-                      ...currentCell,
-                      lexicalState: nextState,
-                    }
-                  })
-                }}
-              />
-            )}
+            <CellEditor
+              cell={cell}
+              isActive={activeCellId === cell.id}
+              onActivate={() => onActivateCell(cell.id)}
+              onChange={(next) => onCellChange(cell.id, next)}
+              onInsertHandle={(handle) => {
+                if (activeCellId === cell.id) {
+                  onInsertHandleReady(handle)
+                }
+              }}
+              onAddCellBelow={() => onAddCellBelow(cell.id)}
+              onDeleteCell={() => onRemoveCell(cell.id)}
+              onFocusPrevious={() => {
+                const prevId = getPreviousCellId(cell.id)
+                if (prevId) onFocusCell(prevId)
+              }}
+              onFocusNext={() => {
+                const nextId = getNextCellId(cell.id)
+                if (nextId) onFocusCell(nextId)
+              }}
+            />
           </div>
         </section>
       ))}

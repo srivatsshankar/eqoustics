@@ -13,18 +13,16 @@
     "@fortawesome/fontawesome-svg-core": "^7.2.0",
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-fontawesome": "^3.3.1",
-    "@lexical/list": "^0.28.0",
-    "@lexical/react": "^0.28.0",
-    "@lexical/rich-text": "^0.28.0",
-    "@lexical/selection": "^0.28.0",
     "electron-store": "^10.0.1",
-    "lexical": "^0.28.0",
-    "mathlive": "^0.108.2",
+    "jquery": "^4.0.0",
+    "mathquill": "^0.10.1-a",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-mathquill": "^1.0.4"
   },
   "devDependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.60.2",
+    "@types/jquery": "^4.0.0",
     "@types/react": "^18.2.64",
     "@types/react-dom": "^18.2.21",
     "@typescript-eslint/eslint-plugin": "^7.1.1",
