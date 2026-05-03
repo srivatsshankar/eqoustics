@@ -1,5 +1,7 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
+  faChevronDown,
   faFile,
   faFolderOpen,
   faFloppyDisk,
@@ -10,13 +12,14 @@ import {
   faSuperscript,
   faSubscript,
 } from '@fortawesome/free-solid-svg-icons'
+import { MatrixDropdown } from './MatrixDropdown'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
   canSave: boolean
   isDirty: boolean
   title: string
-  onInsertSnippet: (snippet: string, mode?: 'cmd' | 'write') => void
+  onInsertSnippet: (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template') => void
   onNewNotebook: () => void
   onOpenNotebook: () => void
   onExportPdf: () => void
@@ -31,8 +34,8 @@ interface SymbolItem {
   value: string
   title: string
   /**
-   * 'cmd'  → MathQuill structural command (e.g. \frac creates a fraction with empty slots).
-   * 'write' → MathQuill write (inserts literal LaTeX — symbols, operators, etc.).
+   * 'cmd'  → structural command (e.g. \frac creates a fraction with empty slots).
+   * 'write' → literal LaTeX symbols, operators, etc.
    */
   mode: 'cmd' | 'write'
 }
@@ -49,8 +52,8 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       { display: 'a/b', value: '\\frac', title: 'Fraction — creates a fraction with empty numerator and denominator', mode: 'cmd' },
       { display: '√', value: '\\sqrt', title: 'Square root — type inside the radical', mode: 'cmd' },
       { display: 'x²', value: '^2', title: 'Squared', mode: 'write' },
-      { display: 'xⁿ', value: '^{ }', title: 'Power / Exponent — type the exponent', mode: 'write' },
-      { display: 'xₙ', value: '_{ }', title: 'Subscript — type the subscript', mode: 'write' },
+      { display: 'xⁿ', value: '^', title: 'Power / Exponent — type the exponent', mode: 'cmd' },
+      { display: 'xₙ', value: '_', title: 'Subscript — type the subscript', mode: 'cmd' },
       { display: '∫', value: '\\int', title: 'Integral', mode: 'cmd' },
       { display: '∑', value: '\\sum', title: 'Summation', mode: 'cmd' },
       { display: '∏', value: '\\prod', title: 'Product', mode: 'cmd' },
@@ -167,14 +170,101 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       { display: 'min', value: '\\min', title: 'Minimum', mode: 'cmd' },
     ],
   },
-  {
-    label: 'Matrices',
-    items: [
-      { display: '2×2', value: '\\begin{pmatrix} & \\\\\\ & \\end{pmatrix}', title: '2×2 Matrix', mode: 'write' },
-      { display: '3×3', value: '\\begin{pmatrix} & & \\\\\\ & & \\\\\\ & & \\end{pmatrix}', title: '3×3 Matrix', mode: 'write' },
-    ],
-  },
 ]
+
+const DROPDOWN_GROUP_LABELS = ['Greek', 'Relations', 'Sets & Logic', 'Arrows']
+const DROPDOWN_GROUP_LABEL_SET = new Set(DROPDOWN_GROUP_LABELS)
+
+function SymbolDropdown({
+  disabled,
+  group,
+  onInsertSnippet,
+}: {
+  disabled: boolean
+  group: SymbolGroup
+  onInsertSnippet: (snippet: string, mode: 'cmd' | 'write') => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+
+  const updateMenuPosition = useCallback(() => {
+    const button = buttonRef.current
+    if (!button) return
+
+    const rect = button.getBoundingClientRect()
+    const menuWidth = Math.min(288, window.innerWidth - 32)
+    setMenuPosition({
+      top: rect.bottom + 6,
+      left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)),
+    })
+  }, [])
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    updateMenuPosition()
+    window.addEventListener('resize', updateMenuPosition)
+    window.addEventListener('scroll', updateMenuPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition)
+      window.removeEventListener('scroll', updateMenuPosition, true)
+    }
+  }, [isOpen, updateMenuPosition])
+
+  return (
+    <div className="toolbar-symbol-dropdown" ref={dropdownRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="symbol-btn symbol-dropdown-trigger"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          updateMenuPosition()
+          setIsOpen((current) => !current)
+        }}
+      >
+        <span>{group.label}</span>
+        <FontAwesomeIcon icon={faChevronDown} />
+      </button>
+      {isOpen ? (
+        <div className="symbol-dropdown-menu" role="menu" style={menuPosition}>
+          {group.items.map((item) => (
+            <button
+              key={item.title}
+              type="button"
+              title={item.title}
+              className="symbol-btn symbol-dropdown-item"
+              role="menuitem"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onInsertSnippet(item.value, item.mode)
+                setIsOpen(false)
+              }}
+            >
+              {item.display}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 export function EditorToolbar({
   hasActiveCell,
@@ -189,6 +279,11 @@ export function EditorToolbar({
   onSaveNotebookAs,
   onTitleChange,
 }: EditorToolbarProps) {
+  const inlineSymbolGroups = SYMBOL_GROUPS.filter((group) => !DROPDOWN_GROUP_LABEL_SET.has(group.label))
+  const dropdownSymbolGroups = DROPDOWN_GROUP_LABELS
+    .map((label) => SYMBOL_GROUPS.find((group) => group.label === label))
+    .filter((group): group is SymbolGroup => Boolean(group))
+
   return (
     <header className="editor-toolbar">
       <div className="toolbar-row toolbar-row-primary">
@@ -257,7 +352,7 @@ export function EditorToolbar({
               disabled={!hasActiveCell}
               className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('^{ }', 'write')}
+              onClick={() => onInsertSnippet('^', 'cmd')}
             >
               <FontAwesomeIcon icon={faSuperscript} />
             </button>
@@ -267,14 +362,14 @@ export function EditorToolbar({
               disabled={!hasActiveCell}
               className="symbol-btn symbol-btn-featured"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('_{ }', 'write')}
+              onClick={() => onInsertSnippet('_', 'cmd')}
             >
               <FontAwesomeIcon icon={faSubscript} />
             </button>
           </div>
 
           {/* Symbol groups */}
-          {SYMBOL_GROUPS.map((group) => (
+          {inlineSymbolGroups.map((group) => (
             <div key={group.label} className="toolbar-group toolbar-group-bordered">
               <span className="toolbar-group-label">{group.label}</span>
               {group.items.map((item) => (
@@ -290,6 +385,14 @@ export function EditorToolbar({
                   {item.display}
                 </button>
               ))}
+            </div>
+          ))}
+
+          <MatrixDropdown disabled={!hasActiveCell} onInsertSnippet={onInsertSnippet} />
+
+          {dropdownSymbolGroups.map((group) => (
+            <div key={group.label} className="toolbar-group toolbar-group-bordered">
+              <SymbolDropdown disabled={!hasActiveCell} group={group} onInsertSnippet={onInsertSnippet} />
             </div>
           ))}
         </div>

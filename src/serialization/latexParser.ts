@@ -1,7 +1,8 @@
 import { createEmptyNotebookDocument, type NotebookDocument, type NotebookCell } from '../shared/types/notebook'
 
-// Current format: % @cell <id> followed by $$latex$$
+// Legacy format: % @cell <id> followed by $$latex$$
 const CELL_MARKER = /^% @cell ([^\s]+)$/
+const DISPLAY_CELL_LINE = /^\$\$([\s\S]*)\$\$(?:\s*% @cell ([^\s]+))?$/
 
 // Legacy formats for backward compatibility
 const RT_MARKER = /^% @rt ([^\s]+) (.+)$/
@@ -75,10 +76,14 @@ function parseCellsFromLines(normalized: string): NotebookCell[] {
 
   for (const line of lines) {
     const cellMatch = line.match(CELL_MARKER)
+    const displayCellMatch = line.match(DISPLAY_CELL_LINE)
     const rtMatch = line.match(RT_MARKER)
     const mathMatch = line.match(MATH_MARKER)
 
-    if (cellMatch) {
+    if (displayCellMatch && !pending) {
+      const id = displayCellMatch[2] || crypto.randomUUID()
+      cells.push({ id, latex: displayCellMatch[1].trim() })
+    } else if (cellMatch) {
       flush()
       pending = { format: 'v2', id: cellMatch[1], contentLines: [] }
     } else if (rtMatch) {

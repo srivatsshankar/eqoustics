@@ -34,7 +34,6 @@
 
 .toolbar-row-contextual {
   min-height: 2.5rem;
-  overflow: hidden;
 }
 
 .toolbar-group {
@@ -229,10 +228,28 @@
   gap: 0.4rem;
   padding: 0.15rem 0;
   background: transparent;
+  transition: transform 120ms ease;
 }
 
 .notebook-cell-active {
   background: transparent;
+}
+
+.row-drop-indicator {
+  height: 0;
+  border-top: 2px solid #2563eb;
+  border-radius: 999px;
+  margin: 0.18rem 0 0.18rem 2.05rem;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.14);
+}
+
+.drag-row-preview {
+  opacity: 0.92;
+  transform: rotate(-0.4deg);
+  pointer-events: none;
+  background: #ffffff;
+  border-radius: 0.45rem;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
 }
 
 .cell-gutter {
@@ -266,6 +283,41 @@
   line-height: 1;
 }
 
+.cell-button-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.cell-button-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.38rem);
+  transform: translate(-50%, 0.2rem);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 6;
+  white-space: nowrap;
+  padding: 0.22rem 0.45rem;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(31, 41, 51, 0.2);
+  background: #111827;
+  color: #f8fafc;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.cell-button-tooltip-wrap:hover .cell-button-tooltip,
+.cell-button-tooltip-wrap:focus-within .cell-button-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.cell-icon-button-active {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.14);
+}
+
 .drag-handle {
   cursor: grab;
 }
@@ -278,111 +330,203 @@
   background: rgba(241, 245, 249, 0.92);
 }
 
-/* ── MathQuill Cell Editor ───────────────────────────── */
+/* Lightweight visual math cell editor */
 
 .cell-editor {
   position: relative;
   min-height: 2em;
-  padding: 0.3rem 0.5rem;
-  border-radius: 0.5rem;
-  border: 2px solid transparent;
+  padding: 0.2rem 0.35rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(31, 41, 51, 0.12);
   cursor: text;
   transition: border-color 180ms ease, background 180ms ease;
 }
 
 .cell-editor:hover {
-  background: rgba(241, 245, 249, 0.4);
+  border-color: rgba(31, 41, 51, 0.22);
+  background: rgba(241, 245, 249, 0.32);
 }
 
 .cell-editor-active {
-  border-color: rgba(59, 130, 246, 0.3);
-  background: rgba(241, 245, 249, 0.5);
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(241, 245, 249, 0.45);
 }
 
-/* MathQuill field styling overrides */
-.cell-editor .mq-editable-field {
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  min-height: 1.6em;
+.visual-math-editor {
+  display: block;
+  width: 100%;
+  min-height: 1.8rem;
+  padding: 0.15rem 0;
+  border: none;
+  background: transparent;
+  color: inherit;
   font-size: 1.15rem;
+  line-height: 1.55;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: #2563eb;
+}
+
+.visual-math-editor:focus {
+  outline: none;
+}
+
+.visual-math-editor:empty::before {
+  content: "";
+  display: inline-block;
+  min-width: 1px;
+}
+
+.math-symbol {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 0 0.08rem;
+  border-radius: 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  color: #111827;
+}
+
+.math-frac,
+.math-sqrt,
+.math-delimiter,
+.math-matrix,
+.math-text,
+.math-script-group {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.08rem;
+}
+
+.math-frac {
+  position: relative;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 1.6rem;
+  line-height: 1.05;
+  text-align: center;
+}
+
+.math-frac-line {
+  display: block;
+  width: 100%;
+  min-width: 1.2rem;
+  border-top: 1px solid currentColor;
+}
+
+.math-sqrt-sign {
+  padding-right: 0.1rem;
+  border-top: 1px solid currentColor;
+  font-size: 0.78em;
+  line-height: 1;
+}
+
+.math-sqrt .math-slot {
+  border-top: 1px solid currentColor;
+  padding-left: 0.15rem;
+}
+
+.math-slot {
+  display: inline-block;
+  min-width: 0.8rem;
+  min-height: 1.1em;
+  padding: 0 0.08rem;
+  border-radius: 0.2rem;
+}
+
+.math-slot:empty::before {
+  content: "";
+  display: inline-block;
+  min-width: 0.55rem;
+  min-height: 1em;
+}
+
+.cell-editor-active:focus-within .visual-math-editor .math-slot:empty::before {
+  min-width: 0.8rem;
+  min-height: 1.05em;
+  border: 1px solid #2563eb;
+  border-radius: 0.18rem;
+  background: rgba(37, 99, 235, 0.08);
+  box-sizing: border-box;
+}
+
+.cell-editor-active:focus-within .visual-math-editor .math-frac .math-slot:not(:empty) {
+  box-shadow: inset 0 0 0 1px #2563eb;
+  border-radius: 0.18rem;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.math-text {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.96em;
+}
+
+.math-text::before,
+.math-text::after {
+  color: #9aa5b1;
+}
+
+.math-text::before {
+  content: "text(";
+}
+
+.math-text::after {
+  content: ")";
+}
+
+.math-delimiter-mark {
+  font-size: 1.25em;
+  line-height: 1;
+}
+
+.math-matrix table {
+  border-collapse: collapse;
+  margin: 0 0.12rem;
+}
+
+.math-matrix td {
+  min-width: 1.4rem;
+  padding: 0.08rem 0.28rem;
+  text-align: center;
+  border: 1px solid rgba(31, 41, 51, 0.12);
+}
+
+.math-script {
+  line-height: 1;
+}
+
+.math-script-group {
+  gap: 0.02rem;
+}
+
+.math-script .math-slot {
+  min-width: 0.5rem;
+  font-size: 0.8em;
+}
+
+.latex-source-editor {
+  display: block;
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(31, 41, 51, 0.14);
+  border-radius: 0.45rem;
+  background: #ffffff;
+  color: #111827;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.92rem;
   line-height: 1.5;
 }
 
-.cell-editor .mq-editable-field .mq-root-block {
-  padding: 0.15em 0;
+.latex-source-editor:focus {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+  outline: none;
 }
 
-/* Make empty MathQuill fields show a placeholder */
-.cell-editor .mq-editable-field .mq-root-block.mq-empty::after {
-  content: 'Type here — use toolbar buttons to insert math';
-  color: #9ca3af;
-  font-style: italic;
-  font-size: 0.95rem;
-  pointer-events: none;
-}
-
-/* ── Empty slots (numerator, denominator, exponent, etc.) ── */
-/* Make empty input slots clearly visible with a highlighted blue box only in active cell */
-.cell-editor-active .mq-editable-field .mq-empty {
-  background: rgba(59, 130, 246, 0.1);
-  border-radius: 4px;
-  min-width: 1.2em;
-  min-height: 1.2em;
-  display: inline-block;
-  border: 2px solid #3b82f6; /* Clear blue bounding box */
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); /* Extra glow for visibility */
-}
-
-/* Also highlight ANY slot (numerator, exponent, etc.) while the user is actively typing inside it */
-.cell-editor-active .mq-editable-field .mq-hasCursor:not(.mq-root-block) {
-  background: rgba(59, 130, 246, 0.1);
-  border-radius: 4px;
-  min-width: 1.2em;
-  min-height: 1.2em;
-  border: 2px solid #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-}
-
-/* Don't apply the empty-slot styling to the root block placeholder */
-.cell-editor-active .mq-editable-field .mq-root-block.mq-empty,
-.cell-editor-active .mq-editable-field .mq-root-block.mq-hasCursor {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  min-width: auto;
-}
-
-/* Active (focused) empty slot styling - slightly darker/different state when cursor is actually inside it */
-.cell-editor-active .mq-editable-field .mq-empty.mq-hasCursor,
-.cell-editor-active .mq-editable-field .mq-hasCursor:not(.mq-root-block) {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
-}
-
-/* Cursor styling */
-.cell-editor .mq-editable-field .mq-cursor {
-  border-left-color: #3b82f6;
-  border-left-width: 2px;
-}
-
-/* Fraction styling — cleaner look */
-.cell-editor .mq-editable-field .mq-fraction .mq-numerator,
-.cell-editor .mq-editable-field .mq-fraction .mq-denominator {
-  padding: 0.1em 0.25em;
-}
-
-/* Selection color */
-.cell-editor .mq-editable-field .mq-selection .mq-matrixed {
-  background: rgba(59, 130, 246, 0.2);
-}
-
-.cell-editor .mq-editable-field .mq-selection .mq-matrixed-container {
-  filter: none;
-}
-
-/* ── Wrapping symbol toolbar ───────────────────────── */
+/* Wrapping symbol toolbar */
 
 .toolbar-symbols-wrap {
   display: flex;
@@ -450,6 +594,36 @@
   background: rgba(59, 130, 246, 0.14);
   border-color: rgba(59, 130, 246, 0.3);
   transform: translateY(-1px);
+}
+
+.toolbar-symbol-dropdown {
+  position: relative;
+}
+
+.symbol-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.symbol-dropdown-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(1.8rem, auto));
+  gap: 0.2rem;
+  min-width: 12rem;
+  max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.45rem;
+  border: 1px solid rgba(31, 41, 51, 0.14);
+  border-radius: 0.45rem;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.symbol-dropdown-item {
+  min-width: 1.8rem;
+  background: transparent;
 }
 
 @media (max-width: 960px) {

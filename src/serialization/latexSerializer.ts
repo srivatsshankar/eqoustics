@@ -3,9 +3,8 @@ import type { NotebookCell, NotebookDocument } from '../shared/types/notebook'
 const EQOUSTICS_VERSION = '2'
 
 function serializeCell(cell: NotebookCell): string {
-  // Single-line marker: % @cell <id>
-  // Content is the LaTeX on the next line, wrapped in $$ for display
-  return `% @cell ${cell.id}\n$$${cell.latex}$$`
+  const latex = (cell.latex || '').replace(/\s*\n\s*/g, ' ').trim()
+  return `$$${latex}$$ % @cell ${cell.id}`
 }
 
 export function serializeNotebookToLatex(document: NotebookDocument): string {
@@ -16,7 +15,7 @@ export function serializeNotebookToLatex(document: NotebookDocument): string {
     `%! updatedAt=${document.metadata.updatedAt}`,
   ]
 
-  const cells = document.cells.map(serializeCell).join('\n\n')
+  const cells = document.cells.map(serializeCell).join('\n')
 
   return [
     ...header,

@@ -15,13 +15,7 @@ declare global {
 			saveNotebookAs: (file: { title: string; content: string }) => Promise<{ path: string } | null>
 			listRecentFiles: () => Promise<RecentFileEntry[]>
 		}
-		jQuery: unknown
-		MathQuill: unknown
 	}
 }
-
-// Declare modules without types
-declare module 'mathquill/build/mathquill.js'
-declare module 'mathquill/build/mathquill.css'
 
 export {}

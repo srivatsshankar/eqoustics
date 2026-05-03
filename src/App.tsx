@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { NotebookEditor } from './components/notebook/NotebookEditor'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
@@ -28,57 +28,11 @@ function titleFromPath(filePath: string | null): string {
   return filename.replace(/\.tex$/i, '')
 }
 
-function WelcomeScreen({
-  recentFiles,
-  onNewNotebook,
-  onOpenNotebook,
-  onOpenRecent,
-}: {
-  recentFiles: RecentFileEntry[]
-  onNewNotebook: () => void
-  onOpenNotebook: () => void
-  onOpenRecent: (path: string) => void
-}) {
-  return (
-    <main className="welcome-shell">
-      <section className="welcome-card">
-        <p className="welcome-eyebrow">Eqoustics</p>
-        <h1>Create and edit beautiful mathematical notebooks</h1>
-        <div className="welcome-actions">
-          <button type="button" onClick={onNewNotebook}>
-            Create New
-          </button>
-          <button type="button" className="ghost-button" onClick={onOpenNotebook}>
-            Open File
-          </button>
-        </div>
-        <section className="welcome-recents">
-          <div className="welcome-recents-header">
-            <h2>Recent Files</h2>
-          </div>
-          {recentFiles.length === 0 ? (
-            <p className="welcome-empty-state">No recent files. Start by creating a new notebook or opening an existing file.</p>
-          ) : (
-            <div className="welcome-recent-list">
-              {recentFiles.map((entry) => (
-                <button key={entry.path} type="button" className="welcome-recent-button" onClick={() => onOpenRecent(entry.path)}>
-                  <span>{entry.title}</span>
-                  <small>{entry.path}</small>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      </section>
-    </main>
-  )
-}
-
 function App() {
   const [document, setDocument] = useState<NotebookDocument | null>(null)
   const [filePath, setFilePath] = useState<string | null>(null)
   const [isBootstrapped, setIsBootstrapped] = useState(false)
-  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
+  const [, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
   const [documentRevision, setDocumentRevision] = useState(0)
   const activeCellHandleRef = useRef<CellInsertHandle | null>(null)
@@ -88,9 +42,15 @@ function App() {
   useEffect(() => {
     void (async () => {
       const recent = await window.eqoustics.listRecentFiles()
+      const nextDocument = await window.eqoustics.createNotebook()
       setRecentFiles(recent)
+      setDocument(nextDocument)
+      setFilePath(null)
+      setDocumentRevision((current) => current + 1)
+      setActiveCellId(nextDocument.cells[0]?.id ?? null)
+      setIsDirty(false)
       setIsBootstrapped(true)
-      setStatusMessage('Choose a notebook to begin.')
+      setStatusMessage('Created a new notebook.')
     })()
   }, [])
 
@@ -116,24 +76,10 @@ function App() {
     })
   })
 
-  useEffect(() => {
-    if (!document || !filePath || !isDirty) {
-      return undefined
-    }
-
-    const handle = window.setTimeout(() => {
-      void persistDocument(false)
-    }, 1200)
-
-    return () => {
-      window.clearTimeout(handle)
-    }
-  }, [document, filePath, isDirty])
-
-  const refreshRecentFiles = async () => {
+  const refreshRecentFiles = useCallback(async () => {
     const entries = await window.eqoustics.listRecentFiles()
     setRecentFiles(entries)
-  }
+  }, [])
 
   const replaceDocument = (nextDocument: NotebookDocument, nextPath: string | null) => {
     setDocument(nextDocument)
@@ -162,14 +108,6 @@ function App() {
     setStatusMessage(`Opened ${opened.path}.`)
   }
 
-  const handleOpenRecent = async (path: string) => {
-    const opened = await window.eqoustics.openNotebookAtPath(path)
-    const parsed = parseNotebookFromLatex(opened.content, titleFromPath(opened.path))
-    replaceDocument(parsed, opened.path)
-    await refreshRecentFiles()
-    setStatusMessage(`Reopened ${opened.path}.`)
-  }
-
   const handleExportPdf = async () => {
     if (!document) {
       return
@@ -187,7 +125,7 @@ function App() {
     setStatusMessage(`Exported PDF to ${result.path}.`)
   }
 
-  const persistDocument = async (saveAs: boolean) => {
+  const persistDocument = useCallback(async (saveAs: boolean) => {
     if (!document) {
       return
     }
@@ -230,7 +168,21 @@ function App() {
     setIsDirty(false)
     await refreshRecentFiles()
     setStatusMessage(`Saved ${result.path}.`)
-  }
+  }, [document, filePath, refreshRecentFiles])
+
+  useEffect(() => {
+    if (!document || !filePath || !isDirty) {
+      return undefined
+    }
+
+    const handle = window.setTimeout(() => {
+      void persistDocument(false)
+    }, 1200)
+
+    return () => {
+      window.clearTimeout(handle)
+    }
+  }, [document, filePath, isDirty, persistDocument])
 
   const updateDocument = (updater: (current: NotebookDocument) => NotebookDocument) => {
     setDocument((current) => {
@@ -251,7 +203,7 @@ function App() {
     }))
   }
 
-  const handleMoveCell = (sourceCellId: string, targetCellId: string) => {
+  const handleMoveCell = (sourceCellId: string, targetCellId: string, position: 'before' | 'after') => {
     setActiveCellId(sourceCellId)
     
     updateDocument((current) => {
@@ -266,9 +218,18 @@ function App() {
         return current
       }
 
+      let insertionIndex = targetIndex + (position === 'after' ? 1 : 0)
+      if (sourceIndex < insertionIndex) {
+        insertionIndex -= 1
+      }
+
+      if (sourceIndex === insertionIndex) {
+        return current
+      }
+
       const nextCells = [...current.cells]
       const [movedCell] = nextCells.splice(sourceIndex, 1)
-      nextCells.splice(targetIndex, 0, movedCell)
+      nextCells.splice(insertionIndex, 0, movedCell)
 
       return {
         ...current,
@@ -323,7 +284,7 @@ function App() {
     })
   }
 
-  const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write') => {
+  const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template') => {
     activeCellHandleRef.current?.insert(snippet, mode)
   }
 
@@ -336,14 +297,7 @@ function App() {
   }
 
   if (!document) {
-    return (
-      <WelcomeScreen
-        recentFiles={recentFiles}
-        onNewNotebook={() => void handleNewNotebook()}
-        onOpenNotebook={() => void handleOpenNotebook()}
-        onOpenRecent={(path) => void handleOpenRecent(path)}
-      />
-    )
+    return <main className="app-shell loading-shell">Loading notebook...</main>
   }
 
   return (
