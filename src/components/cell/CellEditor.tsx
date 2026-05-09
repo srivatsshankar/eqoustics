@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 
 import type { NotebookCell } from '../../shared/types/notebook'
 
-type InsertMode = 'cmd' | 'write' | 'latex' | 'template'
+type InsertMode = 'cmd' | 'write' | 'latex' | 'template' | 'func-slot'
 
 export interface CellInsertHandle {
   insert: (snippet: string, mode?: InsertMode) => void
@@ -30,26 +30,81 @@ const COMMAND_DISPLAY: Record<string, string> = {
   '\\epsilon': '&epsilon;',
   '\\zeta': '&zeta;',
   '\\theta': '&theta;',
+  '\\vartheta': '&thetasym;',
+  '\\kappa': '&kappa;',
+  '\\varkappa': '&#1008;',
+  '\\eta': '&eta;',
+  '\\iota': '&iota;',
   '\\lambda': '&lambda;',
   '\\mu': '&mu;',
+  '\\nu': '&nu;',
+  '\\upsilon': '&upsilon;',
   '\\xi': '&xi;',
+  '\\Xi': '&Xi;',
   '\\pi': '&pi;',
+  '\\varpi': '&piv;',
   '\\rho': '&rho;',
+  '\\varrho': '&rhov;',
   '\\sigma': '&sigma;',
+  '\\varsigma': '&sigmaf;',
   '\\tau': '&tau;',
   '\\phi': '&phi;',
+  '\\varphi': '&#981;',
   '\\chi': '&chi;',
   '\\psi': '&psi;',
   '\\omega': '&omega;',
+  '\\digamma': '&#989;',
+  '\\varepsilon': '&epsiv;',
   '\\Gamma': '&Gamma;',
   '\\Delta': '&Delta;',
   '\\Theta': '&Theta;',
   '\\Lambda': '&Lambda;',
   '\\Pi': '&Pi;',
   '\\Sigma': '&Sigma;',
+  '\\Upsilon': '&Upsilon;',
   '\\Phi': '&Phi;',
   '\\Psi': '&Psi;',
   '\\Omega': '&Omega;',
+  '\\aleph': '&alefsym;',
+  '\\alef': '&alefsym;',
+  '\\alefsym': '&alefsym;',
+  '\\beth': '&#8502;',
+  '\\gimel': '&#8503;',
+  '\\daleth': '&#8504;',
+  '\\imath': '&#305;',
+  '\\jmath': '&#567;',
+  '\\Im': '&image;',
+  '\\image': '&image;',
+  '\\Re': '&real;',
+  '\\real': '&real;',
+  '\\Reals': '&#8477;',
+  '\\R': '&#8477;',
+  '\\reals': '&#8477;',
+  '\\N': '&#8469;',
+  '\\natnums': '&#8469;',
+  '\\Z': '&#8484;',
+  '\\cnums': '&#8450;',
+  '\\Complex': '&#8450;',
+  '\\Bbbk': '&#120156;',
+  '\\ell': '&ell;',
+  '\\hbar': '&hbar;',
+  '\\hslash': '&#8463;',
+  '\\wp': '&weierp;',
+  '\\weierp': '&weierp;',
+  '\\Game': '&#8519;',
+  '\\Finv': '&#8498;',
+  '\\eth': '&eth;',
+  '\\OE': '&OElig;',
+  '\\o': '&oslash;',
+  '\\O': '&Oslash;',
+  '\\ss': '&szlig;',
+  '\\aa': '&aring;',
+  '\\AA': '&Aring;',
+  '\\i': '&#305;',
+  '\\j': '&#567;',
+  '\\ae': '&aelig;',
+  '\\AE': '&AElig;',
+  '\\oe': '&oelig;',
   '\\ne': '&ne;',
   '\\le': '&le;',
   '\\ge': '&ge;',
@@ -99,6 +154,59 @@ const COMMAND_DISPLAY: Record<string, string> = {
 }
 
 const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix'])
+const VISUAL_FUNCTION_COMMANDS = new Set([
+  '\\arcsin',
+  '\\arccos',
+  '\\arctan',
+  '\\arctg',
+  '\\arcctg',
+  '\\arg',
+  '\\argmax',
+  '\\argmin',
+  '\\ch',
+  '\\cos',
+  '\\cosec',
+  '\\cosh',
+  '\\cot',
+  '\\cotg',
+  '\\coth',
+  '\\csc',
+  '\\ctg',
+  '\\cth',
+  '\\deg',
+  '\\det',
+  '\\dim',
+  '\\exp',
+  '\\gcd',
+  '\\hom',
+  '\\inf',
+  '\\injlim',
+  '\\ker',
+  '\\lg',
+  '\\lim',
+  '\\liminf',
+  '\\limsup',
+  '\\ln',
+  '\\log',
+  '\\max',
+  '\\min',
+  '\\plim',
+  '\\Pr',
+  '\\projlim',
+  '\\sec',
+  '\\sin',
+  '\\sinh',
+  '\\sh',
+  '\\sup',
+  '\\tan',
+  '\\tanh',
+  '\\tg',
+  '\\th',
+  '\\varinjlim',
+  '\\varliminf',
+  '\\varlimsup',
+  '\\varprojlim',
+])
 const CARET_ANCHOR = '\u200b'
 
 function escapeHtml(value: string): string {
@@ -127,6 +235,11 @@ function commandHtml(command: string): string {
   return `<span class="math-symbol" data-latex="${escapeAttr(command)}">${display}</span>`
 }
 
+function operatorNameHtml(command: '\\operatorname' | '\\operatorname*', body: string): string {
+  const latex = `${command}{${body}}`
+  return `<span class="math-symbol" data-latex="${escapeAttr(latex)}">${escapeHtml(body)}</span>`
+}
+
 function slotHtml(role: string, content = '', marker = false, className = ''): string {
   const classes = ['math-slot', className].filter(Boolean).join(' ')
   return `<span class="${classes}" data-slot="${role}">${marker ? '<span data-caret-marker="true"></span>' : ''}${content}</span>`
@@ -143,7 +256,11 @@ function fractionHtml(numerator = '', denominator = '', focusNumerator = false):
 }
 
 function sqrtHtml(body = '', focusBody = false): string {
-  return `<span class="math-sqrt" data-math="sqrt"><span class="math-sqrt-sign">&radic;</span>${slotHtml('radicand', body, focusBody)}</span>`
+  return `<span class="math-sqrt" data-math="sqrt"><svg class="math-sqrt-sign" viewBox="0 0 18 24" aria-hidden="true" focusable="false"><path d="M1 14.5H4.7L8.2 22L13.4 1.6" /></svg>${slotHtml('radicand', body, focusBody)}</span>`
+}
+
+function indexedRootHtml(index = '', body = '', focusIndex = false): string {
+  return `<span class="math-sqrt math-indexed-root" data-math="root">${slotHtml('root-index', index, focusIndex, 'math-root-index')}<svg class="math-sqrt-sign" viewBox="0 0 18 24" aria-hidden="true" focusable="false"><path d="M1 14.5H4.7L8.2 22L13.4 1.6" /></svg>${slotHtml('radicand', body)}</span>`
 }
 
 function scriptHtml(kind: 'sup' | 'sub', body = '', focusBody = false): string {
@@ -185,10 +302,19 @@ function matrixHtml(env: string, rows: string[][], focusFirstCell = false): stri
 }
 
 function findMatchingBrace(source: string, openIndex: number): number {
+  return findMatchingDelimiter(source, openIndex, '{', '}')
+}
+
+function findMatchingDelimiter(source: string, openIndex: number, open: string, close: string): number {
   let depth = 0
   for (let i = openIndex; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
+    if (source[i] === open) depth += 1
     if (source[i] === '}') {
+      if (close !== '}') continue
+      depth -= 1
+      if (depth === 0) return i
+    }
+    if (source[i] === close && close !== '}') {
       depth -= 1
       if (depth === 0) return i
     }
@@ -201,6 +327,25 @@ function readGroup(source: string, index: number): { body: string; end: number }
   const close = findMatchingBrace(source, index)
   if (close < 0) return null
   return { body: source.slice(index + 1, close), end: close + 1 }
+}
+
+function readBracketGroup(source: string, index: number): { body: string; end: number } | null {
+  if (source[index] !== '[') return null
+  const close = findMatchingDelimiter(source, index, '[', ']')
+  if (close < 0) return null
+  return { body: source.slice(index + 1, close), end: close + 1 }
+}
+
+function readGroupAfterSpaces(source: string, index: number): { body: string; end: number } | null {
+  let cursor = index
+  while (source[cursor] === ' ') cursor += 1
+  return readGroup(source, cursor)
+}
+
+function readBracketGroupAfterSpaces(source: string, index: number): { body: string; end: number } | null {
+  let cursor = index
+  while (source[cursor] === ' ') cursor += 1
+  return readBracketGroup(source, cursor)
 }
 
 function readGroupOrToken(source: string, index: number): { body: string; end: number } {
@@ -302,9 +447,12 @@ function renderLatexToHtml(latex: string): string {
       }
 
       if (command === '\\sqrt') {
-        const group = readGroup(source, end)
+        const indexGroup = readBracketGroupAfterSpaces(source, end)
+        const group = readGroupAfterSpaces(source, indexGroup?.end ?? end)
         if (group) {
-          html += sqrtHtml(renderSlotLatex(group.body))
+          html += indexGroup
+            ? indexedRootHtml(renderSlotLatex(indexGroup.body), renderSlotLatex(group.body))
+            : sqrtHtml(renderSlotLatex(group.body))
           index = group.end
           continue
         }
@@ -317,6 +465,29 @@ function renderLatexToHtml(latex: string): string {
           index = group.end
           continue
         }
+      }
+
+      if (command === '\\operatorname' || command === '\\operatorname*') {
+        const group = readGroup(source, end)
+        if (group) {
+          const argument = readGroupAfterSpaces(source, group.end)
+          html += operatorNameHtml(command, group.body)
+          if (argument) {
+            html += slotHtml('function-arg', renderSlotLatex(argument.body))
+            index = argument.end
+          } else {
+            index = group.end
+          }
+          continue
+        }
+      }
+
+      const argument = VISUAL_FUNCTION_COMMANDS.has(command) ? readGroupAfterSpaces(source, end) : null
+      if (argument) {
+        html += commandHtml(command)
+        html += slotHtml('function-arg', renderSlotLatex(argument.body))
+        index = argument.end
+        continue
       }
 
       html += commandHtml(command)
@@ -366,6 +537,14 @@ function serializeFirstSlot(element: Element, role: string): string {
   return slot ? serializeChildren(slot).trim() : ''
 }
 
+function isFunctionArgSlot(node: Node | null): boolean {
+  return node instanceof HTMLElement && node.dataset.slot === 'function-arg'
+}
+
+function isAtomicMathElement(node: Node | null): boolean {
+  return node instanceof HTMLElement && Boolean(node.dataset.math || node.dataset.latex || node.dataset.slot === 'function-arg')
+}
+
 function serializeNode(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) {
     return escapeMathText(node.textContent ?? '').replace(/\u200b/g, '')
@@ -375,7 +554,11 @@ function serializeNode(node: Node): string {
   if (node.tagName === 'BR') return ' '
 
   const symbolLatex = node.dataset.latex
-  if (symbolLatex) return `${symbolLatex} `
+  if (symbolLatex) return isFunctionArgSlot(node.nextSibling) ? symbolLatex : `${symbolLatex} `
+
+  if (node.dataset.slot === 'function-arg') {
+    return `{${serializeChildren(node).trim() || ' '}}`
+  }
 
   const mathKind = node.dataset.math
   if (mathKind === 'frac') {
@@ -386,6 +569,12 @@ function serializeNode(node: Node): string {
 
   if (mathKind === 'sqrt') {
     return `\\sqrt{${serializeDirectSlot(node, 'radicand') || ' '}}`
+  }
+
+  if (mathKind === 'root') {
+    const index = serializeDirectSlot(node, 'root-index') || ' '
+    const radicand = serializeDirectSlot(node, 'radicand') || ' '
+    return `\\sqrt[${index}]{${radicand}}`
   }
 
   if (mathKind === 'sup') {
@@ -432,6 +621,7 @@ function serializeEditor(editor: HTMLElement): string {
 
 function getLatexSourceSnippet(snippet: string, mode: InsertMode = 'write'): string {
   if (mode === 'template') return snippet.replace(/#\?/g, ' ')
+  if (mode === 'func-slot') return `${snippet}{ }`
   if (mode === 'latex' || mode === 'write') return snippet
 
   const templates: Record<string, string> = {
@@ -439,6 +629,7 @@ function getLatexSourceSnippet(snippet: string, mode: InsertMode = 'write'): str
     '_': '_{ }',
     '\\frac': '\\frac{ }{ }',
     '\\sqrt': '\\sqrt{ }',
+    '\\sqrt[]': '\\sqrt[ ]{ }',
     '\\text': '\\text{ }',
   }
 
@@ -460,11 +651,16 @@ function focusFirstSlotInHtml(html: string): string {
 }
 
 function htmlForSnippet(snippet: string, mode: InsertMode = 'write'): string {
+  if (mode === 'func-slot') {
+    return `${commandHtml(snippet)}${slotHtml('function-arg', '', true)}`
+  }
+
   if (mode === 'cmd') {
     if (snippet === '^') return scriptTemplateHtml('sup')
     if (snippet === '_') return scriptTemplateHtml('sub')
     if (snippet === '\\frac') return fractionHtml('', '', true)
     if (snippet === '\\sqrt') return sqrtHtml('', true)
+    if (snippet === '\\sqrt[]') return indexedRootHtml('', '', true)
     if (snippet === '\\text') return textHtml('', true)
     return commandHtml(snippet)
   }
@@ -543,12 +739,29 @@ function placeCaretAfterNode(node: Node): void {
   selection?.addRange(range)
 }
 
+function placeCaretAfterNodeBoundary(node: Node): void {
+  const range = document.createRange()
+  range.setStartAfter(node)
+  range.collapse(true)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+}
+
 function placeCaretBeforeNode(node: Node): void {
   const parent = node.parentNode
   if (!parent) return
   const range = document.createRange()
   range.setStartBefore(node)
   range.collapse(true)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+}
+
+function selectNode(node: Node): void {
+  const range = document.createRange()
+  range.selectNode(node)
   const selection = window.getSelection()
   selection?.removeAllRanges()
   selection?.addRange(range)
@@ -568,6 +781,203 @@ function owningMathElement(slot: HTMLElement): HTMLElement | null {
 
 function slotsOwnedByMathElement(mathElement: HTMLElement): HTMLElement[] {
   return Array.from(mathElement.querySelectorAll<HTMLElement>('.math-slot')).filter((slot) => owningMathElement(slot) === mathElement)
+}
+
+function clearSelectedMathElements(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('[data-math-selected="true"]').forEach((element) => {
+    delete element.dataset.mathSelected
+  })
+}
+
+function markSelectedMathElement(root: HTMLElement, mathElement: HTMLElement): void {
+  clearSelectedMathElements(root)
+  mathElement.dataset.mathSelected = 'true'
+  selectNode(mathElement)
+}
+
+function exactSelectedMathElement(root: HTMLElement): HTMLElement | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+
+  const range = selection.getRangeAt(0)
+  if (range.startContainer !== range.endContainer || range.endOffset !== range.startOffset + 1) return null
+
+  const selectedNode = range.startContainer.childNodes[range.startOffset]
+  return selectedNode instanceof HTMLElement && isAtomicMathElement(selectedNode) && root.contains(selectedNode) ? selectedNode : null
+}
+
+function textHasContent(value: string): boolean {
+  return value.replace(/\u200b/g, '').length > 0
+}
+
+function adjacentMathElementFromNode(node: Node | null, reverse: boolean, scope: HTMLElement): HTMLElement | null {
+  let candidate = node
+
+  while (candidate && scope.contains(candidate)) {
+    if (candidate.nodeType === Node.TEXT_NODE) {
+      if (textHasContent(candidate.textContent ?? '')) return null
+    } else if (candidate instanceof HTMLElement) {
+      if (isAtomicMathElement(candidate)) return candidate
+      if (candidate.textContent?.replace(/\u200b/g, '').trim() || candidate.children.length > 0) return null
+    }
+
+    candidate = reverse ? candidate.previousSibling : candidate.nextSibling
+  }
+
+  return null
+}
+
+function adjacentNodeAtCaretBoundary(container: Node, offset: number, reverse: boolean, scope: HTMLElement): Node | null {
+  if (container.nodeType === Node.TEXT_NODE) {
+    const text = container.textContent ?? ''
+    const remainingText = reverse ? text.slice(0, offset) : text.slice(offset)
+    if (textHasContent(remainingText)) return null
+
+    let candidate: Node | null = reverse ? container.previousSibling : container.nextSibling
+    let parent = container.parentNode
+
+    while (!candidate && parent && parent !== scope) {
+      candidate = reverse ? parent.previousSibling : parent.nextSibling
+      parent = parent.parentNode
+    }
+
+    return candidate
+  }
+
+  let candidate: Node | null = container.childNodes[reverse ? offset - 1 : offset] ?? null
+  let parent: Node | null = container
+
+  while (!candidate && parent && parent !== scope) {
+    candidate = reverse ? parent.previousSibling : parent.nextSibling
+    parent = parent.parentNode
+  }
+
+  return candidate
+}
+
+function adjacentMathElementAtCaret(root: HTMLElement, reverse: boolean): HTMLElement | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null
+
+  const range = selection.getRangeAt(0)
+  const focusElement = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement
+  const inlineCommand = focusElement?.closest<HTMLElement>('[data-latex]')
+  if (inlineCommand && root.contains(inlineCommand)) return inlineCommand
+
+  const activeSlot = currentSlot(root)
+  const scope = activeSlot ?? root
+  if (!scope.contains(range.startContainer)) return null
+
+  const adjacentNode = adjacentNodeAtCaretBoundary(range.startContainer, range.startOffset, reverse, scope)
+  return adjacentMathElementFromNode(adjacentNode, reverse, scope)
+}
+
+function mathElementContainingCaret(root: HTMLElement): HTMLElement | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null
+
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer)) return null
+
+  const focusElement = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement
+  const inlineCommand = focusElement?.closest<HTMLElement>('[data-latex]')
+  if (inlineCommand && root.contains(inlineCommand)) return inlineCommand
+
+  if (currentSlot(root)) return null
+
+  const mathElement = focusElement?.closest<HTMLElement>('[data-math]')
+  return mathElement && root.contains(mathElement) ? mathElement : null
+}
+
+function deleteSelectedMathElement(root: HTMLElement): boolean {
+  const mathElement = exactSelectedMathElement(root)
+  if (!mathElement) return false
+
+  const parent = mathElement.parentNode
+  if (!parent) return false
+
+  const range = document.createRange()
+  range.setStartBefore(mathElement)
+  range.collapse(true)
+  mathElement.remove()
+
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  clearSelectedMathElements(root)
+  return true
+}
+
+function emptyFunctionArgSlotContainingCaret(root: HTMLElement, reverse: boolean): HTMLElement | null {
+  const slot = currentSlot(root)
+  if (!slot || slot.dataset.slot !== 'function-arg' || serializeChildren(slot).trim()) return null
+  if (!caretIsAtSlotEdge(slot, !reverse)) return null
+  return root.contains(slot) ? slot : null
+}
+
+function handleAtomicMathDelete(root: HTMLElement, reverse: boolean): 'deleted' | 'selected' | false {
+  if (deleteSelectedMathElement(root)) return 'deleted'
+
+  const mathElement = emptyFunctionArgSlotContainingCaret(root, reverse) ?? mathElementContainingCaret(root) ?? adjacentMathElementAtCaret(root, reverse)
+  if (!mathElement) return false
+
+  markSelectedMathElement(root, mathElement)
+  return 'selected'
+}
+
+function caretIsAtProtectedSlotDeleteBoundary(root: HTMLElement, reverse: boolean): boolean {
+  const slot = currentSlot(root)
+  return Boolean(slot && caretIsAtSlotEdge(slot, !reverse))
+}
+
+function outerMathElementsForSelection(root: HTMLElement, range: Range): HTMLElement[] {
+  if (!root.contains(range.commonAncestorContainer)) return []
+
+  const selectedMathElements = Array.from(root.querySelectorAll<HTMLElement>('[data-math]')).filter((mathElement) => {
+    if (!range.intersectsNode(mathElement)) return false
+
+    const selectionIsInsideSingleOwnedSlot = slotsOwnedByMathElement(mathElement).some((slot) => (
+      slot.contains(range.startContainer) && slot.contains(range.endContainer)
+    ))
+    return !selectionIsInsideSingleOwnedSlot
+  })
+
+  const outerSelectedMathElements = selectedMathElements.filter((mathElement) => (
+    !selectedMathElements.some((otherElement) => otherElement !== mathElement && otherElement.contains(mathElement))
+  ))
+
+  return outerSelectedMathElements
+}
+
+function previewSelectionAroundMathElements(root: HTMLElement): void {
+  const selection = window.getSelection()
+  clearSelectedMathElements(root)
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+  const outerSelectedMathElements = outerMathElementsForSelection(root, selection.getRangeAt(0))
+  outerSelectedMathElements.forEach((mathElement) => {
+    mathElement.dataset.mathSelected = 'true'
+  })
+}
+
+function normalizeSelectionAroundMathElements(root: HTMLElement): void {
+  const selection = window.getSelection()
+  clearSelectedMathElements(root)
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+  const range = selection.getRangeAt(0)
+  const outerSelectedMathElements = outerMathElementsForSelection(root, range)
+  if (outerSelectedMathElements.length === 0) return
+
+  const nextRange = range.cloneRange()
+  outerSelectedMathElements.forEach((mathElement) => {
+    mathElement.dataset.mathSelected = 'true'
+    if (mathElement.contains(nextRange.startContainer)) nextRange.setStartBefore(mathElement)
+    if (mathElement.contains(nextRange.endContainer)) nextRange.setEndAfter(mathElement)
+  })
+
+  selection.removeAllRanges()
+  selection.addRange(nextRange)
 }
 
 function moveToAdjacentSlot(root: HTMLElement, reverse = false): boolean {
@@ -616,7 +1026,18 @@ function caretIsAtSlotEdge(slot: HTMLElement, atEnd: boolean): boolean {
 function moveOutOfMathElement(root: HTMLElement, reverse = false): boolean {
   const activeSlot = currentSlot(root)
   const activeMathElement = activeSlot ? owningMathElement(activeSlot) : null
-  if (!activeSlot || !activeMathElement) return false
+  if (!activeSlot) return false
+
+  if (!activeMathElement) {
+    if (!caretIsAtSlotEdge(activeSlot, !reverse)) return false
+
+    if (reverse) {
+      placeCaretBeforeNode(activeSlot)
+    } else {
+      placeCaretAfterNodeBoundary(activeSlot)
+    }
+    return true
+  }
 
   const slots = slotsOwnedByMathElement(activeMathElement)
   const activeIndex = slots.indexOf(activeSlot)
@@ -691,6 +1112,13 @@ function placeCaretForMathPointer(
   const mathElement = event.target.closest<HTMLElement>('[data-math]')
   if (!mathElement || !root.contains(mathElement)) return false
 
+  const mathRect = mathElement.getBoundingClientRect()
+  if (event.clientX >= mathRect.right - 2) {
+    root.focus()
+    placeCaretAfterNode(mathElement)
+    return true
+  }
+
   const slot = event.target.closest<HTMLElement>('.math-slot')
   if (slot) {
     if (owningMathElement(slot) !== mathElement) return false
@@ -699,15 +1127,60 @@ function placeCaretForMathPointer(
     const slotIndex = slots.indexOf(slot)
     const contentRect = slotContentRect(slot)
     const slotRect = slot.getBoundingClientRect()
+    const clickIsNearSlotEnd = event.clientX >= slotRect.right - 2
     const clickIsAfterSlotContent = contentRect
-      ? event.clientX > contentRect.right + 4
-      : event.clientX > slotRect.left + slotRect.width * 0.68
+      ? event.clientX >= Math.max(contentRect.right + 1, slotRect.left + slotRect.width * 0.58)
+      : event.clientX >= slotRect.left + slotRect.width * 0.58
 
-    if (slotIndex !== slots.length - 1 || !clickIsAfterSlotContent) return false
+    if (slotIndex !== slots.length - 1 || (!clickIsNearSlotEnd && !clickIsAfterSlotContent)) return false
   }
 
   root.focus()
   placeCaretAfterNode(mathElement)
+  return true
+}
+
+function placeCaretForCommandPointer(
+  root: HTMLElement,
+  event: { clientX: number; target: EventTarget | null },
+): boolean {
+  if (!(event.target instanceof HTMLElement)) return false
+
+  const command = event.target.closest<HTMLElement>('[data-latex]')
+  if (!command || !root.contains(command)) return false
+
+  const rect = command.getBoundingClientRect()
+  root.focus()
+  if (event.clientX < rect.left + rect.width / 2) {
+    placeCaretBeforeNode(command)
+  } else {
+    placeCaretAfterNode(command)
+  }
+  return true
+}
+
+function placeCaretForStandaloneSlotPointer(
+  root: HTMLElement,
+  event: { clientX: number; target: EventTarget | null },
+): boolean {
+  if (!(event.target instanceof HTMLElement)) return false
+
+  const slot = event.target.closest<HTMLElement>('.math-slot')
+  if (!slot || !root.contains(slot) || owningMathElement(slot)) return false
+
+  const slotHasSavedContent = serializeChildren(slot).trim().length > 0
+  const contentRect = slotHasSavedContent ? slotContentRect(slot) : null
+  const slotRect = slot.getBoundingClientRect()
+  const isFunctionArgSlotElement = slot.dataset.slot === 'function-arg'
+  const clickIsNearSlotEnd = event.clientX >= slotRect.right - 2
+  const clickIsAfterSlotContent = contentRect
+    ? event.clientX >= Math.max(contentRect.right + 1, slotRect.left + slotRect.width * 0.58)
+    : event.clientX >= slotRect.left + slotRect.width * (isFunctionArgSlotElement ? 0.42 : 0.58)
+
+  if (!clickIsNearSlotEnd && !clickIsAfterSlotContent) return false
+
+  root.focus()
+  placeCaretAfterNodeBoundary(slot)
   return true
 }
 
@@ -791,6 +1264,8 @@ export function CellEditor({
   const onDeleteCellRef = useRef(onDeleteCell)
   const onFocusPreviousRef = useRef(onFocusPrevious)
   const onFocusNextRef = useRef(onFocusNext)
+  const pointerStartRef = useRef<{ clientX: number; clientY: number } | null>(null)
+  const selectionPreviewFrameRef = useRef<number | null>(null)
 
   cellRef.current = cell
   onActivateRef.current = onActivate
@@ -837,6 +1312,15 @@ export function CellEditor({
     commitVisualEditor()
   }, [commitVisualEditor])
 
+  const scheduleSelectionPreview = useCallback((editor: HTMLElement) => {
+    if (selectionPreviewFrameRef.current !== null) return
+
+    selectionPreviewFrameRef.current = window.requestAnimationFrame(() => {
+      selectionPreviewFrameRef.current = null
+      previewSelectionAroundMathElements(editor)
+    })
+  }, [])
+
   const syncHandle = useCallback(() => {
     if (viewMode === 'latex') {
       onInsertHandleRef.current({
@@ -855,6 +1339,14 @@ export function CellEditor({
   useEffect(() => {
     syncHandle()
   }, [syncHandle])
+
+  useEffect(() => {
+    return () => {
+      if (selectionPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionPreviewFrameRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!isActive) return
@@ -890,16 +1382,28 @@ export function CellEditor({
     if (event.key === 'Tab') {
       event.preventDefault()
       moveToAdjacentSlot(event.currentTarget, event.shiftKey)
+    } else if ((event.key === 'Backspace' || event.key === 'Delete') && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      normalizeSelectionAroundMathElements(event.currentTarget)
+      const atomicDeleteResult = handleAtomicMathDelete(event.currentTarget, event.key === 'Backspace')
+      if (atomicDeleteResult) {
+        event.preventDefault()
+        if (atomicDeleteResult === 'deleted') commitVisualEditor()
+      } else if (caretIsAtProtectedSlotDeleteBoundary(event.currentTarget, event.key === 'Backspace')) {
+        event.preventDefault()
+      } else if (event.key === 'Backspace' && !serializeEditor(event.currentTarget).trim()) {
+        onDeleteCellRef.current()
+      }
     } else if (isTextInputKey(event)) {
+      clearSelectedMathElements(event.currentTarget)
       normalizeSelectionForTyping(event.currentTarget)
     } else if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
       event.preventDefault()
       onAddCellBelowRef.current()
-    } else if (event.key === 'Backspace' && !serializeEditor(event.currentTarget).trim()) {
-      onDeleteCellRef.current()
     } else if (event.key === 'ArrowRight' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      clearSelectedMathElements(event.currentTarget)
       if (moveOutOfMathElement(event.currentTarget)) event.preventDefault()
     } else if (event.key === 'ArrowLeft' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      clearSelectedMathElements(event.currentTarget)
       if (moveOutOfMathElement(event.currentTarget, true)) event.preventDefault()
     } else if (event.key === 'ArrowUp' && event.ctrlKey) {
       event.preventDefault()
@@ -943,13 +1447,67 @@ export function CellEditor({
           spellCheck={false}
           suppressContentEditableWarning
           onFocus={onActivate}
+          onBlur={(event) => {
+            pointerStartRef.current = null
+            clearSelectedMathElements(event.currentTarget)
+          }}
           onBeforeInput={(event) => normalizeSelectionForTyping(event.currentTarget)}
           onInput={commitVisualEditor}
           onKeyDown={handleEditorKeyDown}
+          onKeyUp={(event) => normalizeSelectionAroundMathElements(event.currentTarget)}
+          onSelect={(event) => scheduleSelectionPreview(event.currentTarget)}
           onPointerDown={(event) => {
-            if (placeCaretForMathPointer(event.currentTarget, event) || placeCaretForEditorPointer(event.currentTarget, event)) {
+            clearSelectedMathElements(event.currentTarget)
+            if (placeCaretForStandaloneSlotPointer(event.currentTarget, event)) {
               event.preventDefault()
+              pointerStartRef.current = null
+              return
             }
+            pointerStartRef.current = { clientX: event.clientX, clientY: event.clientY }
+          }}
+          onPointerMove={(event) => {
+            const pointerStart = pointerStartRef.current
+            if (!pointerStart) return
+
+            const movement = Math.hypot(event.clientX - pointerStart.clientX, event.clientY - pointerStart.clientY)
+            if (movement >= 4) scheduleSelectionPreview(event.currentTarget)
+          }}
+          onPointerUp={(event) => {
+            const editor = event.currentTarget
+            const target = event.target
+            const clientX = event.clientX
+            const clientY = event.clientY
+            const pointerStart = pointerStartRef.current
+            pointerStartRef.current = null
+            if (selectionPreviewFrameRef.current !== null) {
+              window.cancelAnimationFrame(selectionPreviewFrameRef.current)
+              selectionPreviewFrameRef.current = null
+            }
+
+            window.requestAnimationFrame(() => {
+              const selection = window.getSelection()
+              const movement = pointerStart
+                ? Math.hypot(clientX - pointerStart.clientX, clientY - pointerStart.clientY)
+                : Number.POSITIVE_INFINITY
+              const isClick = movement < 4
+
+              if (!isClick || (selection && selection.rangeCount > 0 && !selection.isCollapsed)) {
+                normalizeSelectionAroundMathElements(editor)
+                return
+              }
+
+              if (
+                !placeCaretForMathPointer(editor, { clientX, target }) &&
+                !placeCaretForCommandPointer(editor, { clientX, target }) &&
+                !placeCaretForStandaloneSlotPointer(editor, { clientX, target })
+              ) {
+                placeCaretForEditorPointer(editor, { clientX, clientY, target })
+              }
+            })
+          }}
+          onPointerCancel={(event) => {
+            pointerStartRef.current = null
+            clearSelectedMathElements(event.currentTarget)
           }}
           onContextMenu={(event) => event.preventDefault()}
           onPaste={(event) => {
@@ -962,3 +1520,4 @@ export function CellEditor({
     </div>
   )
 }
+

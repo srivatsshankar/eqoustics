@@ -4,6 +4,12 @@
   font-weight: 400;
   color: #1f2933;
   background: #f3efe6;
+  --scrollbar-size: 10px;
+  --scrollbar-thumb: rgba(100, 116, 139, 0.6);
+  --scrollbar-thumb-hover: rgba(71, 85, 105, 0.82);
+  --scrollbar-track: transparent;
+  --scrollbar-button: rgba(100, 116, 139, 0.78);
+  --scrollbar-button-hover: rgba(51, 65, 85, 0.95);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,10 +26,91 @@ body,
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  height: 100%;
+}
+
+body,
+#root {
+  overflow: hidden;
 }
 
 body {
   background: #f3efe6;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: calc(var(--scrollbar-size) + 2px);
+  height: calc(var(--scrollbar-size) + 2px);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  min-height: 1.75rem;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-button {
+  display: block;
+  width: calc(var(--scrollbar-size) + 2px);
+  height: 14px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+*::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background:
+    linear-gradient(135deg, transparent 50%, var(--scrollbar-button) 50%) center 58% / 7px 7px no-repeat,
+    linear-gradient(225deg, transparent 50%, var(--scrollbar-button) 50%) center 58% / 7px 7px no-repeat;
+}
+
+*::-webkit-scrollbar-button:single-button:vertical:increment {
+  background:
+    linear-gradient(315deg, transparent 50%, var(--scrollbar-button) 50%) center 42% / 7px 7px no-repeat,
+    linear-gradient(45deg, transparent 50%, var(--scrollbar-button) 50%) center 42% / 7px 7px no-repeat;
+}
+
+*::-webkit-scrollbar-button:single-button:horizontal:decrement {
+  background:
+    linear-gradient(45deg, transparent 50%, var(--scrollbar-button) 50%) 42% center / 7px 7px no-repeat,
+    linear-gradient(135deg, transparent 50%, var(--scrollbar-button) 50%) 42% center / 7px 7px no-repeat;
+}
+
+*::-webkit-scrollbar-button:single-button:horizontal:increment {
+  background:
+    linear-gradient(225deg, transparent 50%, var(--scrollbar-button) 50%) 58% center / 7px 7px no-repeat,
+    linear-gradient(315deg, transparent 50%, var(--scrollbar-button) 50%) 58% center / 7px 7px no-repeat;
+}
+
+*::-webkit-scrollbar-button:hover {
+  filter: saturate(1.15) brightness(1.05);
+}
+
+*::-webkit-scrollbar-button:active:single-button:vertical:decrement,
+*::-webkit-scrollbar-button:active:single-button:vertical:increment,
+*::-webkit-scrollbar-button:active:single-button:horizontal:decrement,
+*::-webkit-scrollbar-button:active:single-button:horizontal:increment {
+  background-color: transparent;
 }
 
 button,
@@ -33,7 +120,7 @@ textarea {
 }
 
 button {
-  border-radius: 0.8rem;
+  border-radius: 0.3rem;
   border: 1px solid rgba(31, 41, 51, 0.1);
   padding: 0.65rem 0.95rem;
   font-size: 0.92rem;

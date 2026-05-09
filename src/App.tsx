@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faSquare as faSquareRegular } from '@fortawesome/free-regular-svg-icons'
+import {
+  faSquare,
+  faWindowMinimize,
+  faXmark,
+} from '@fortawesome/free-solid-svg-icons'
 
 import { NotebookEditor } from './components/notebook/NotebookEditor'
+import { CustomScrollbar } from './components/scrollbar/CustomScrollbar'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
 import type { CellInsertHandle } from './components/cell/CellEditor'
 
@@ -28,16 +36,30 @@ function titleFromPath(filePath: string | null): string {
   return filename.replace(/\.tex$/i, '')
 }
 
+function titleBarLabelFromPath(filePath: string | null): string {
+  if (!filePath) {
+    return 'Untitled Notebook'
+  }
+
+  const segments = filePath.split(/[/\\]/)
+  return segments[segments.length - 1] ?? 'Untitled Notebook'
+}
+
+function isDocumentBlank(document: NotebookDocument): boolean {
+  return document.cells.every((cell) => !cell.latex.trim())
+}
+
 function App() {
   const [document, setDocument] = useState<NotebookDocument | null>(null)
   const [filePath, setFilePath] = useState<string | null>(null)
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false)
   const [isBootstrapped, setIsBootstrapped] = useState(false)
   const [, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
   const [documentRevision, setDocumentRevision] = useState(0)
   const activeCellHandleRef = useRef<CellInsertHandle | null>(null)
+  const documentShellRef = useRef<HTMLElement | null>(null)
   const [isDirty, setIsDirty] = useState(false)
-  const [statusMessage, setStatusMessage] = useState('Loading notebook workspace...')
 
   useEffect(() => {
     void (async () => {
@@ -50,7 +72,6 @@ function App() {
       setActiveCellId(nextDocument.cells[0]?.id ?? null)
       setIsDirty(false)
       setIsBootstrapped(true)
-      setStatusMessage('Created a new notebook.')
     })()
   }, [])
 
@@ -76,6 +97,27 @@ function App() {
     })
   })
 
+  useEffect(() => {
+    let isMounted = true
+
+    void (async () => {
+      const windowState = await window.eqoustics.getWindowState()
+
+      if (isMounted) {
+        setIsWindowMaximized(windowState.isMaximized)
+      }
+    })()
+
+    const unsubscribe = window.eqoustics.onWindowStateChange((windowState) => {
+      setIsWindowMaximized(windowState.isMaximized)
+    })
+
+    return () => {
+      isMounted = false
+      unsubscribe()
+    }
+  }, [])
+
   const refreshRecentFiles = useCallback(async () => {
     const entries = await window.eqoustics.listRecentFiles()
     setRecentFiles(entries)
@@ -92,7 +134,6 @@ function App() {
   const handleNewNotebook = async () => {
     const nextDocument = await window.eqoustics.createNotebook()
     replaceDocument(nextDocument, null)
-    setStatusMessage('Created a new notebook.')
   }
 
   const handleOpenNotebook = async () => {
@@ -105,7 +146,6 @@ function App() {
     const parsed = parseNotebookFromLatex(opened.content, titleFromPath(opened.path))
     replaceDocument(parsed, opened.path)
     await refreshRecentFiles()
-    setStatusMessage(`Opened ${opened.path}.`)
   }
 
   const handleExportPdf = async () => {
@@ -122,7 +162,6 @@ function App() {
       return
     }
 
-    setStatusMessage(`Exported PDF to ${result.path}.`)
   }
 
   const persistDocument = useCallback(async (saveAs: boolean) => {
@@ -150,7 +189,6 @@ function App() {
       setFilePath(result.path)
       setIsDirty(false)
       await refreshRecentFiles()
-      setStatusMessage(`Saved ${result.path}.`)
       return
     }
 
@@ -167,7 +205,6 @@ function App() {
     setFilePath(result.path)
     setIsDirty(false)
     await refreshRecentFiles()
-    setStatusMessage(`Saved ${result.path}.`)
   }, [document, filePath, refreshRecentFiles])
 
   useEffect(() => {
@@ -284,7 +321,7 @@ function App() {
     })
   }
 
-  const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template') => {
+  const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template' | 'func-slot') => {
     activeCellHandleRef.current?.insert(snippet, mode)
   }
 
@@ -300,47 +337,96 @@ function App() {
     return <main className="app-shell loading-shell">Loading notebook...</main>
   }
 
+  const isSaved = Boolean(filePath) && !isDirty
+
   return (
     <main className="app-shell">
+      <header className="window-titlebar">
+        <div className="window-titlebar-drag-zone" />
+        <div className="window-titlebar-center" onDoubleClick={() => void window.eqoustics.windowControl('toggleMaximize')}>
+          <span className="cell-button-tooltip-wrap window-title-tooltip-wrap">
+            <span className="window-document-title">
+              {titleBarLabelFromPath(filePath)} <span className="window-app-title-separator">• Eqoustics</span>
+            </span>
+            <span className="cell-button-tooltip window-title-tooltip">{filePath ?? 'Not saved yet'}</span>
+          </span>
+          <span className={`window-save-state ${isSaved ? 'window-save-state-saved' : 'window-save-state-unsaved'}`}>
+            {isSaved ? 'Saved' : 'Unsaved'}
+          </span>
+        </div>
+        <div className="window-controls">
+          <button
+            className="window-control-button window-control-minimize"
+            type="button"
+            onClick={() => void window.eqoustics.windowControl('minimize')}
+            aria-label="Minimize window"
+            title="Minimize"
+          >
+            <FontAwesomeIcon icon={faWindowMinimize} />
+          </button>
+          <button
+            className="window-control-button window-control-maximize"
+            type="button"
+            onClick={() => void window.eqoustics.windowControl('toggleMaximize')}
+            aria-label={isWindowMaximized ? 'Restore window' : 'Maximize window'}
+            title={isWindowMaximized ? 'Restore' : 'Maximize'}
+          >
+            <FontAwesomeIcon icon={isWindowMaximized ? faSquareRegular : faSquare} />
+          </button>
+          <button
+            className="window-control-button window-control-close"
+            type="button"
+            onClick={() => void window.eqoustics.windowControl('close')}
+            aria-label="Close window"
+            title="Close"
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
+        </div>
+      </header>
       <EditorToolbar
         hasActiveCell={activeCellId !== null}
         onInsertSnippet={handleInsertSnippet}
         canSave={Boolean(document)}
-        isDirty={isDirty}
-        title={document.metadata.title}
         onExportPdf={() => void handleExportPdf()}
         onNewNotebook={handleNewNotebook}
         onOpenNotebook={handleOpenNotebook}
         onSaveNotebook={() => void persistDocument(false)}
         onSaveNotebookAs={() => void persistDocument(true)}
-        onTitleChange={(title) => {
-          updateDocument((current) => ({
-            ...current,
-            metadata: {
-              ...current.metadata,
-              title,
-            },
-          }))
-        }}
       />
-      <section className="document-shell">
-        <div className="document-status-row">
-          <span className="document-path">{filePath ?? 'Not saved yet'}</span>
-          <span className="document-status-message">{statusMessage}</span>
-        </div>
-        <NotebookEditor
-          activeCellId={activeCellId}
-          document={document}
-          documentRevision={documentRevision}
-          onActivateCell={handleFocusCell}
-          onAddCellBelow={handleAddCellBelow}
-          onCellChange={handleCellChange}
-          onInsertHandleReady={(handle) => { activeCellHandleRef.current = handle }}
-          onMoveCell={handleMoveCell}
-          onRemoveCell={handleRemoveCell}
-          onFocusCell={handleFocusCell}
-        />
-      </section>
+      <div className="document-scroll-region">
+        <section
+          ref={documentShellRef}
+          className="document-shell custom-scrollbar-target"
+          onPointerDownCapture={(event) => {
+            if (event.target instanceof HTMLElement && event.target.closest('.notebook-cell')) return
+            if (isDocumentBlank(document)) {
+              setActiveCellId(document.cells[0]?.id ?? null)
+            } else {
+              setActiveCellId(null)
+            }
+
+            const activeElement = window.document.activeElement
+            if (activeElement instanceof HTMLElement && event.currentTarget.contains(activeElement)) {
+              activeElement.blur()
+            }
+          }}
+        >
+          <NotebookEditor
+            activeCellId={activeCellId}
+            document={document}
+            documentRevision={documentRevision}
+            onActivateCell={handleFocusCell}
+            onAddCellBelow={handleAddCellBelow}
+            onCellChange={handleCellChange}
+            onInsertHandleReady={(handle) => { activeCellHandleRef.current = handle }}
+            onMoveCell={handleMoveCell}
+            onRemoveCell={handleRemoveCell}
+            onFocusCell={handleFocusCell}
+          />
+        </section>
+        <CustomScrollbar targetRef={documentShellRef} />
+      </div>
     </main>
   )
 }

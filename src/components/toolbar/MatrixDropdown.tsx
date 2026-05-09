@@ -66,7 +66,7 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
             zIndex: 1000,
             background: '#ffffff',
             border: '1px solid rgba(31, 41, 51, 0.12)',
-            borderRadius: '0.5rem',
+            borderRadius: '0.25rem',
             padding: '1rem',
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
             display: 'flex',
@@ -133,7 +133,7 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
                 width: '3rem',
                 padding: '0.25rem',
                 border: '1px solid rgba(31, 41, 51, 0.2)',
-                borderRadius: '0.25rem',
+                borderRadius: '0.12rem',
                 textAlign: 'center',
               }}
             />
@@ -150,7 +150,7 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
                 width: '3rem',
                 padding: '0.25rem',
                 border: '1px solid rgba(31, 41, 51, 0.2)',
-                borderRadius: '0.25rem',
+                borderRadius: '0.12rem',
                 textAlign: 'center',
               }}
             />
@@ -163,7 +163,7 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
                 padding: '0.3rem 0.6rem',
                 background: '#f1f5f9',
                 border: '1px solid #e2e8f0',
-                borderRadius: '0.25rem',
+                borderRadius: '0.12rem',
                 cursor: 'pointer',
                 fontSize: '0.8rem',
               }}

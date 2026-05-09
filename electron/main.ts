@@ -1,12 +1,15 @@
-import { Menu, app, type MenuItemConstructorOptions, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Store from 'electron-store'
 
-import { IPC_CHANNELS, type FileMenuAction } from '../src/shared/ipc/channels'
+import { IPC_CHANNELS, type WindowControlAction, type WindowStatePayload } from '../src/shared/ipc/channels'
 import { registerFileHandlers } from './ipc/file-handlers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Force classic scrollbars so custom ::-webkit-scrollbar styling is honored in Electron.
+app.commandLine.appendSwitch('disable-features', 'OverlayScrollbar,OverlayScrollbars')
 
 // The built directory structure
 //
@@ -29,52 +32,56 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 let win: BrowserWindow | null
 const store = new Store()
 
-function dispatchMenuAction(action: FileMenuAction) {
-  win?.webContents.send(IPC_CHANNELS.menuAction, action)
+function getWindowState(window: BrowserWindow): WindowStatePayload {
+  return { isMaximized: window.isMaximized() }
 }
 
-function buildApplicationMenu() {
-  const fileMenu: MenuItemConstructorOptions = {
-    label: 'File',
-    submenu: [
-      {
-        label: 'New',
-        accelerator: 'CommandOrControl+N',
-        click: () => dispatchMenuAction('new'),
-      },
-      {
-        label: 'Open',
-        accelerator: 'CommandOrControl+O',
-        click: () => dispatchMenuAction('open'),
-      },
-      { type: 'separator' },
-      {
-        label: 'Save',
-        accelerator: 'CommandOrControl+S',
-        click: () => dispatchMenuAction('save'),
-      },
-      {
-        label: 'Save As',
-        accelerator: 'CommandOrControl+Shift+S',
-        click: () => dispatchMenuAction('saveAs'),
-      },
-      { type: 'separator' },
-      {
-        label: 'Export PDF',
-        accelerator: 'CommandOrControl+Shift+E',
-        click: () => dispatchMenuAction('exportPdf'),
-      },
-      { type: 'separator' },
-      process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
-    ],
-  }
+function publishWindowState(window: BrowserWindow) {
+  window.webContents.send(IPC_CHANNELS.windowStateChanged, getWindowState(window))
+}
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate([fileMenu]))
+function registerWindowControlHandlers() {
+  ipcMain.removeHandler(IPC_CHANNELS.windowControl)
+  ipcMain.handle(IPC_CHANNELS.windowControl, (event, action: WindowControlAction) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender)
+
+    if (!targetWindow) {
+      return
+    }
+
+    switch (action) {
+      case 'minimize':
+        targetWindow.minimize()
+        return
+      case 'toggleMaximize':
+        if (targetWindow.isMaximized()) {
+          targetWindow.unmaximize()
+        } else {
+          targetWindow.maximize()
+        }
+        return
+      case 'close':
+        targetWindow.close()
+        return
+    }
+  })
+
+  ipcMain.removeHandler(IPC_CHANNELS.getWindowState)
+  ipcMain.handle(IPC_CHANNELS.getWindowState, (event) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender)
+
+    if (!targetWindow) {
+      return { isMaximized: false }
+    }
+
+    return getWindowState(targetWindow)
+  })
 }
 
 function createWindow() {
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    frame: false,
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -87,6 +94,10 @@ function createWindow() {
     win?.maximize()
     win?.show()
   })
+
+  const createdWindow = win
+  createdWindow.on('maximize', () => publishWindowState(createdWindow))
+  createdWindow.on('unmaximize', () => publishWindowState(createdWindow))
 
   registerFileHandlers(win, store)
 
@@ -117,6 +128,7 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
+  registerWindowControlHandlers()
   createWindow()
-  buildApplicationMenu()
+  Menu.setApplicationMenu(null)
 })

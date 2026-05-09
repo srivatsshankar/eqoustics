@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc/channels'
-import type { FileMenuAction } from '../src/shared/ipc/channels'
+import type { FileMenuAction, WindowControlAction, WindowStatePayload } from '../src/shared/ipc/channels'
 import type { NotebookDocument, RecentFileEntry, StoredNotebookFile } from '../src/shared/types/notebook'
 
 contextBridge.exposeInMainWorld('eqoustics', {
@@ -31,4 +31,17 @@ contextBridge.exposeInMainWorld('eqoustics', {
     return ipcRenderer.invoke(IPC_CHANNELS.saveNotebookAs, file) as Promise<{ path: string } | null>
   },
   listRecentFiles: () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles) as Promise<RecentFileEntry[]>,
+  windowControl: (action: WindowControlAction) => ipcRenderer.invoke(IPC_CHANNELS.windowControl, action) as Promise<void>,
+  getWindowState: () => ipcRenderer.invoke(IPC_CHANNELS.getWindowState) as Promise<WindowStatePayload>,
+  onWindowStateChange: (listener: (state: WindowStatePayload) => void) => {
+    const wrappedListener = (_event: unknown, state: WindowStatePayload) => {
+      listener(state)
+    }
+
+    ipcRenderer.on(IPC_CHANNELS.windowStateChanged, wrappedListener)
+
+    return () => {
+      ipcRenderer.off(IPC_CHANNELS.windowStateChanged, wrappedListener)
+    }
+  },
 })

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { FileMenuAction } from './shared/ipc/channels'
+import type { FileMenuAction, WindowControlAction, WindowStatePayload } from './shared/ipc/channels'
 import type { NotebookDocument, RecentFileEntry, StoredNotebookFile } from './shared/types/notebook'
 
 declare global {
@@ -14,6 +14,9 @@ declare global {
 			saveNotebook: (file: StoredNotebookFile & { title: string }) => Promise<{ path: string }>
 			saveNotebookAs: (file: { title: string; content: string }) => Promise<{ path: string } | null>
 			listRecentFiles: () => Promise<RecentFileEntry[]>
+			windowControl: (action: WindowControlAction) => Promise<void>
+			getWindowState: () => Promise<WindowStatePayload>
+			onWindowStateChange: (listener: (state: WindowStatePayload) => void) => () => void
 		}
 	}
 }
