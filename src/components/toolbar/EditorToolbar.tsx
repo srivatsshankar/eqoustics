@@ -2,26 +2,45 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faSquare as faSquareRegular } from '@fortawesome/free-regular-svg-icons'
 import {
+  faBold,
   faChevronDown,
   faFile,
-  faFolderOpen,
   faFloppyDisk,
-  faFileArrowDown,
-  faFilePdf,
+  faFolderOpen,
+  faHeading,
+  faItalic,
+  faListOl,
+  faListUl,
+  faArrowRotateLeft,
+  faArrowRotateRight,
   faSquareRootVariable,
+  faUnderline,
+  faFileExport,
+  faFilePdf,
+  faFileCode,
+  faCopy,
+  faScissors,
+  faPaste,
 } from '@fortawesome/free-solid-svg-icons'
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
 import { MatrixDropdown } from './MatrixDropdown'
+import type { TextFormatCommand } from '../cell/CellEditor'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
   canSave: boolean
   onInsertSnippet: (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template' | 'func-slot') => void
+  onFormatText: (format: TextFormatCommand) => void
   onNewNotebook: () => void
   onOpenNotebook: () => void
   onExportPdf: () => void
+  onExportLatex: () => void
   onSaveNotebook: () => void
   onSaveNotebookAs: () => void
+  canUndo: boolean
+  canRedo: boolean
+  onUndo: () => void
+  onRedo: () => void
 }
 
 interface SymbolItem {
@@ -407,6 +426,7 @@ function SymbolDropdown({
   const [openVariantKey, setOpenVariantKey] = useState<string | null>(null)
   const [indexedFunctionDefaults, setIndexedFunctionDefaults] = useState<Set<string>>(() => new Set())
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+  const [floatingTooltip, setFloatingTooltip] = useState<{ title: string; top: number; left: number; placement: 'above' | 'below' } | null>(null)
   const isFunctionsGroup = group.label === 'Functions'
   const menuSections = group.label === 'Greek'
     ? [
@@ -437,9 +457,9 @@ function SymbolDropdown({
 
         return sections
       })()
-    : [
-      { label: null, items: group.items },
-    ]
+      : [
+        { label: null, items: group.items },
+      ]
 
   const updateMenuPosition = useCallback(() => {
     const button = buttonRef.current
@@ -452,6 +472,18 @@ function SymbolDropdown({
       left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)),
     })
   }, [isFunctionsGroup])
+
+  const showFloatingTooltip = useCallback((title: string, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect()
+    const estimatedHalfWidth = Math.min(Math.max(title.length * 3.8, 42), 150)
+    const placement = rect.top > 36 ? 'above' : 'below'
+    setFloatingTooltip({
+      title,
+      top: placement === 'above' ? rect.top - 8 : rect.bottom + 8,
+      left: Math.max(estimatedHalfWidth + 8, Math.min(rect.left + rect.width / 2, window.innerWidth - estimatedHalfWidth - 8)),
+      placement,
+    })
+  }, [])
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -478,7 +510,10 @@ function SymbolDropdown({
   }, [isOpen, updateMenuPosition])
 
   useEffect(() => {
-    if (!isOpen) setOpenVariantKey(null)
+    if (!isOpen) {
+      setOpenVariantKey(null)
+      setFloatingTooltip(null)
+    }
   }, [isOpen])
 
   return (
@@ -511,7 +546,14 @@ function SymbolDropdown({
                 {section.label ? <span className="symbol-dropdown-section-title">{section.label}</span> : null}
                 <div className={`symbol-dropdown-section-grid${isFunctionsGroup ? ' symbol-dropdown-section-grid-functions' : ''}`}>
                   {section.items.map((item) => (
-                    <div key={`${section.label ?? group.label}-${item.value}`} className={`cell-button-tooltip-wrap symbol-dropdown-item-wrap${isFunctionsGroup ? ' symbol-dropdown-item-wrap-functions' : ''}`}>
+                    <div
+                      key={`${section.label ?? group.label}-${item.value}`}
+                      className={`cell-button-tooltip-wrap symbol-dropdown-item-wrap${isFunctionsGroup ? ' symbol-dropdown-item-wrap-functions' : ''}`}
+                      onMouseEnter={(event) => showFloatingTooltip(item.title, event.currentTarget)}
+                      onMouseLeave={() => setFloatingTooltip(null)}
+                      onFocusCapture={(event) => showFloatingTooltip(item.title, event.currentTarget)}
+                      onBlurCapture={() => setFloatingTooltip(null)}
+                    >
                       {isFunctionsGroup ? (
                         <div className="symbol-dropdown-item-pair">
                           <div className="cell-button-tooltip-wrap">
@@ -519,6 +561,8 @@ function SymbolDropdown({
                               type="button"
                               className={`symbol-btn symbol-dropdown-item symbol-dropdown-item-functions${indexedFunctionDefaults.has(item.value) ? ' symbol-dropdown-item-functions-indexed-default' : ''}`}
                               role="menuitem"
+                              title={item.title}
+                              aria-label={item.title}
                               onMouseDown={(event) => event.preventDefault()}
                               onClick={() => {
                                 const useIndexedDefault = indexedFunctionDefaults.has(item.value)
@@ -542,6 +586,8 @@ function SymbolDropdown({
                               type="button"
                               className="symbol-btn symbol-dropdown-item-variant-trigger"
                               role="menuitem"
+                              title={`${item.title} insertion options`}
+                              aria-label={`${item.title} insertion options`}
                               onMouseDown={(event) => event.preventDefault()}
                               onClick={() => {
                                 const key = `${section.label ?? group.label}-${item.value}`
@@ -556,6 +602,8 @@ function SymbolDropdown({
                                   type="button"
                                   className="symbol-btn symbol-dropdown-item-variant-option"
                                   role="menuitem"
+                                  title={`${item.title} with argument slot`}
+                                  aria-label={`${item.title} with argument slot`}
                                   onMouseDown={(event) => event.preventDefault()}
                                   onClick={() => {
                                     onInsertSnippet(item.value, 'func-slot')
@@ -579,6 +627,8 @@ function SymbolDropdown({
                                   type="button"
                                   className="symbol-btn symbol-dropdown-item-variant-option"
                                   role="menuitem"
+                                  title={item.title}
+                                  aria-label={item.title}
                                   onMouseDown={(event) => event.preventDefault()}
                                   onClick={() => {
                                     onInsertSnippet(item.value, item.mode)
@@ -603,6 +653,8 @@ function SymbolDropdown({
                             type="button"
                             className="symbol-btn symbol-dropdown-item"
                             role="menuitem"
+                            title={item.title}
+                            aria-label={item.title}
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => {
                               onInsertSnippet(item.value, item.mode)
@@ -621,6 +673,14 @@ function SymbolDropdown({
             ))}
           </div>
           <CustomScrollbar targetRef={menuRef} className="custom-scrollbar-menu" />
+          {floatingTooltip ? (
+            <span
+              className={`dropdown-floating-tooltip dropdown-floating-tooltip-${floatingTooltip.placement}`}
+              style={{ top: `${floatingTooltip.top}px`, left: `${floatingTooltip.left}px` }}
+            >
+              {floatingTooltip.title}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -631,136 +691,264 @@ export function EditorToolbar({
   hasActiveCell,
   canSave,
   onInsertSnippet,
+  onFormatText,
   onExportPdf,
+  onExportLatex,
   onNewNotebook,
   onOpenNotebook,
   onSaveNotebook,
   onSaveNotebookAs,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
 }: EditorToolbarProps) {
   const inlineSymbolGroups = SYMBOL_GROUPS.filter((group) => !DROPDOWN_GROUP_LABEL_SET.has(group.label))
   const dropdownSymbolGroups = DROPDOWN_GROUP_LABELS
     .map((label) => SYMBOL_GROUPS.find((group) => group.label === label))
     .filter((group): group is SymbolGroup => Boolean(group))
+  const [isFileMenuOpen, setIsFileMenuOpen] = useState(false)
+  const [isEditMenuOpen, setIsEditMenuOpen] = useState(false)
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false)
+  const fileMenuContainerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!isFileMenuOpen && !isEditMenuOpen) {
+      return
+    }
+
+    function handleOutsideClick(event: MouseEvent) {
+      if (fileMenuContainerRef.current && !fileMenuContainerRef.current.contains(event.target as Node)) {
+        setIsFileMenuOpen(false)
+        setIsEditMenuOpen(false)
+        setIsExportMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [isEditMenuOpen, isFileMenuOpen])
+
+  const executeFileAction = (action: () => void) => {
+    action()
+    setIsFileMenuOpen(false)
+    setIsEditMenuOpen(false)
+    setIsExportMenuOpen(false)
+  }
+
+  const executeEditAction = (action: () => void) => {
+    action()
+    setIsFileMenuOpen(false)
+    setIsEditMenuOpen(false)
+    setIsExportMenuOpen(false)
+  }
 
   return (
-    <header className="editor-toolbar">
-      <div className="toolbar-row toolbar-row-primary">
+    <header className="editor-toolbar" ref={fileMenuContainerRef}>
+      <div className="toolbar-row toolbar-row-menu">
         <div className="toolbar-group">
-          <div className="title-icon-actions" aria-label="File actions">
-            <button type="button" className="icon-button" title="New Notebook" onClick={onNewNotebook}>
-              <FontAwesomeIcon icon={faFile} />
-            </button>
-            <button type="button" className="icon-button" title="Open File" onClick={onOpenNotebook}>
-              <FontAwesomeIcon icon={faFolderOpen} />
-            </button>
-            <button type="button" className="icon-button" title="Save" disabled={!canSave} onClick={onSaveNotebook}>
-              <FontAwesomeIcon icon={faFloppyDisk} />
-            </button>
-            <button type="button" className="icon-button" title="Save As..." disabled={!canSave} onClick={onSaveNotebookAs}>
-              <FontAwesomeIcon icon={faFileArrowDown} />
-            </button>
-            <button type="button" className="icon-button" title="Export as PDF" disabled={!canSave} onClick={onExportPdf}>
-              <FontAwesomeIcon icon={faFilePdf} />
-            </button>
-          </div>
+          <button
+            type="button"
+            className={`menu-bar-button${isFileMenuOpen ? ' menu-bar-button-open' : ''}`}
+            aria-haspopup="menu"
+            aria-expanded={isFileMenuOpen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setIsFileMenuOpen((current) => !current)
+              setIsEditMenuOpen(false)
+              setIsExportMenuOpen(false)
+            }}
+          >
+            <span>File</span>
+          </button>
+          <button
+            type="button"
+            className={`menu-bar-button${isEditMenuOpen ? ' menu-bar-button-open' : ''}`}
+            aria-haspopup="menu"
+            aria-expanded={isEditMenuOpen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setIsEditMenuOpen((current) => !current)
+              setIsFileMenuOpen(false)
+              setIsExportMenuOpen(false)
+            }}
+          >
+            <span>Edit</span>
+          </button>
         </div>
       </div>
       <div className="toolbar-row toolbar-row-contextual">
         <div className="toolbar-symbols-wrap">
-          {/* Quick-access structure buttons */}
+          {/* Quick-access notation buttons */}
           <div className="toolbar-group toolbar-group-bordered">
-            <span className="toolbar-group-label">Structures</span>
-            <button
-              type="button"
-              title="Fraction — creates numerator/denominator slots"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\frac', 'cmd')}
-            >
-              a/b
-            </button>
-            <button
-              type="button"
-              title="Square root — type inside the radical"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\sqrt', 'cmd')}
-            >
-              <FontAwesomeIcon icon={faSquareRootVariable} />
-            </button>
-            <button
-              type="button"
-              title="Indexed root - type the root number, then the radicand"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\sqrt[]', 'cmd')}
-            >
-              <span className="nth-root-symbol">n</span>
-              <FontAwesomeIcon icon={faSquareRootVariable} />
-            </button>
-            <button
-              type="button"
-              title="Superscript / Power — type the exponent"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('^', 'cmd')}
-            >
-              xⁿ
-            </button>
-            <button
-              type="button"
-              title="Subscript — type the subscript"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('_', 'cmd')}
-            >
-              xₙ
-            </button>
-            <button
-              type="button"
-              title="Absolute value"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\left|\\right|', 'write')}
-            >
-              |x|
-            </button>
-            <button
-              type="button"
-              title="Parentheses"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\left(\\right)', 'write')}
-            >
-              ()
-            </button>
-            <button
-              type="button"
-              title="Brackets"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\left[\\right]', 'write')}
-            >
-              []
-            </button>
-            <button
-              type="button"
-              title="Curly braces"
-              disabled={!hasActiveCell}
-              className="symbol-btn symbol-btn-featured"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onInsertSnippet('\\lbrace\\rbrace', 'write')}
-            >
-              {'{ }'}
-            </button>
+            <span className="toolbar-group-label">Notation</span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Fraction — creates numerator/denominator slots"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\frac', 'cmd')}
+              >
+                a/b
+              </button>
+              <span className="cell-button-tooltip">Fraction</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Square root — type inside the radical"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\sqrt', 'cmd')}
+              >
+                <FontAwesomeIcon icon={faSquareRootVariable} />
+              </button>
+              <span className="cell-button-tooltip">Square root</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Indexed root - type the root number, then the radicand"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\sqrt[]', 'cmd')}
+              >
+                <span className="nth-root-symbol">n</span>
+                <FontAwesomeIcon icon={faSquareRootVariable} />
+              </button>
+              <span className="cell-button-tooltip">Indexed root</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Superscript / Power — type the exponent"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('^', 'cmd')}
+              >
+                xⁿ
+              </button>
+              <span className="cell-button-tooltip">Power / Exponent</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Subscript — type the subscript"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('_', 'cmd')}
+              >
+                xₙ
+              </button>
+              <span className="cell-button-tooltip">Subscript</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Lower bound"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\underset', 'cmd')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1, gap: '1px' }}>
+                  <span style={{ fontSize: '0.7em' }}>x</span>
+                  <span style={{ fontSize: '0.55em' }}>a</span>
+                </div>
+              </button>
+              <span className="cell-button-tooltip">Lower bound</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Upper bound"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\overset', 'cmd')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1, gap: '1px' }}>
+                  <span style={{ fontSize: '0.55em' }}>b</span>
+                  <span style={{ fontSize: '0.7em' }}>x</span>
+                </div>
+              </button>
+              <span className="cell-button-tooltip">Upper bound</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Lower and upper bounds"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\bothset', 'cmd')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1, gap: '0px' }}>
+                  <span style={{ fontSize: '0.5em' }}>b</span>
+                  <span style={{ fontSize: '0.65em' }}>x</span>
+                  <span style={{ fontSize: '0.5em' }}>a</span>
+                </div>
+              </button>
+              <span className="cell-button-tooltip">Lower and upper bounds</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Absolute value"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\left|\\right|', 'write')}
+              >
+                |x|
+              </button>
+              <span className="cell-button-tooltip">Absolute value</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Parentheses"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\left(\\right)', 'write')}
+              >
+                ()
+              </button>
+              <span className="cell-button-tooltip">Parentheses</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Brackets"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\left[\\right]', 'write')}
+              >
+                []
+              </button>
+              <span className="cell-button-tooltip">Brackets</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button
+                type="button"
+                aria-label="Curly braces"
+                disabled={!hasActiveCell}
+                className="symbol-btn symbol-btn-featured"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onInsertSnippet('\\left\\lbrace\\right\\rbrace', 'write')}
+              >
+                {'{ }'}
+              </button>
+              <span className="cell-button-tooltip">Curly braces</span>
+            </span>
           </div>
 
           {/* Symbol groups */}
@@ -768,17 +956,19 @@ export function EditorToolbar({
             <div key={group.label} className="toolbar-group toolbar-group-bordered">
               <span className="toolbar-group-label">{group.label}</span>
               {group.items.map((item) => (
-                <button
-                  key={item.title}
-                  type="button"
-                  title={item.title}
-                  disabled={!hasActiveCell}
-                  className="symbol-btn"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onInsertSnippet(item.value, item.mode)}
-                >
-                  {item.display}
-                </button>
+                <span key={item.title} className="cell-button-tooltip-wrap">
+                  <button
+                    type="button"
+                    aria-label={item.title}
+                    disabled={!hasActiveCell}
+                    className="symbol-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onInsertSnippet(item.value, item.mode)}
+                  >
+                    {item.display}
+                  </button>
+                  <span className="cell-button-tooltip">{item.title}</span>
+                </span>
               ))}
             </div>
           ))}
@@ -792,7 +982,155 @@ export function EditorToolbar({
           ))}
         </div>
       </div>
+      <div className="toolbar-row toolbar-row-file-actions">
+        <div className="toolbar-group">
+          <div className="title-icon-actions" aria-label="File actions">
+            <span className="cell-button-tooltip-wrap tooltip-edge-safe-left">
+              <button type="button" className="icon-button icon-button-compact" onClick={onNewNotebook}>
+                <FontAwesomeIcon icon={faFile} />
+              </button>
+              <span className="cell-button-tooltip">New Document</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" onClick={onOpenNotebook}>
+                <FontAwesomeIcon icon={faFolderOpen} />
+              </button>
+              <span className="cell-button-tooltip">Open</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!canSave} onClick={onSaveNotebook}>
+                <FontAwesomeIcon icon={faFloppyDisk} />
+              </button>
+              <span className="cell-button-tooltip">Save</span>
+            </span>
+            <span className="toolbar-action-divider" aria-hidden="true" />
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!canUndo} onMouseDown={(event) => event.preventDefault()} onClick={onUndo}>
+                <FontAwesomeIcon icon={faArrowRotateLeft} />
+              </button>
+              <span className="cell-button-tooltip">Undo</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!canRedo} onMouseDown={(event) => event.preventDefault()} onClick={onRedo}>
+                <FontAwesomeIcon icon={faArrowRotateRight} />
+              </button>
+              <span className="cell-button-tooltip">Redo</span>
+            </span>
+            <span className="toolbar-action-divider" aria-hidden="true" />
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={() => onFormatText('bold')}>
+                <FontAwesomeIcon icon={faBold} />
+              </button>
+              <span className="cell-button-tooltip">Bold</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={() => onFormatText('italic')}>
+                <FontAwesomeIcon icon={faItalic} />
+              </button>
+              <span className="cell-button-tooltip">Italic</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={() => onFormatText('underline')}>
+                <FontAwesomeIcon icon={faUnderline} />
+              </button>
+              <span className="cell-button-tooltip">Underline</span>
+            </span>
+            <span className="toolbar-action-divider" aria-hidden="true" />
+            {[1, 2, 3, 4].map((level) => (
+              <span key={level} className="cell-button-tooltip-wrap">
+                <button
+                  type="button"
+                  className="icon-button icon-button-compact heading-format-button"
+                  disabled={!hasActiveCell}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onFormatText(`heading${level}` as TextFormatCommand)}
+                >
+                  <FontAwesomeIcon icon={faHeading} />
+                  <span className="heading-format-level">{level}</span>
+                </button>
+                <span className="cell-button-tooltip">Heading {level}</span>
+              </span>
+            ))}
+            <span className="toolbar-action-divider" aria-hidden="true" />
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={() => onFormatText('bulletList')}>
+                <FontAwesomeIcon icon={faListUl} />
+              </button>
+              <span className="cell-button-tooltip">Bullets</span>
+            </span>
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={() => onFormatText('numberedList')}>
+                <FontAwesomeIcon icon={faListOl} />
+              </button>
+              <span className="cell-button-tooltip">Numbering</span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className={`file-menu-drawer${isFileMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="File">
+        <button type="button" className="file-menu-item" role="menuitem" onClick={() => executeFileAction(onNewNotebook)}>
+          <FontAwesomeIcon icon={faFile} style={{ width: '1rem', marginRight: '0.4rem' }} /> New Document
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" onClick={() => executeFileAction(onOpenNotebook)}>
+          <FontAwesomeIcon icon={faFolderOpen} style={{ width: '1rem', marginRight: '0.4rem' }} /> Open Existing Document
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canSave} onClick={() => executeFileAction(onSaveNotebook)}>
+          <FontAwesomeIcon icon={faFloppyDisk} style={{ width: '1rem', marginRight: '0.4rem' }} /> Save File
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canSave} onClick={() => executeFileAction(onSaveNotebookAs)}>
+          <FontAwesomeIcon icon={faFloppyDisk} style={{ width: '1rem', marginRight: '0.4rem' }} /> Save As…
+        </button>
+        <div className="menu-divider" />
+        <div className="file-menu-export">
+          <button
+            type="button"
+            className={`file-menu-item file-menu-export-trigger${isExportMenuOpen ? ' file-menu-export-trigger-open' : ''}`}
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={isExportMenuOpen}
+            disabled={!canSave}
+            onClick={() => setIsExportMenuOpen((current) => !current)}
+          >
+            <span><FontAwesomeIcon icon={faFileExport} style={{ width: '1rem', marginRight: '0.4rem' }} /> Export As…</span>
+            <FontAwesomeIcon icon={faChevronDown} />
+          </button>
+          {isExportMenuOpen ? (
+            <div className="file-menu-export-options" role="menu">
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onClick={() => executeFileAction(onExportPdf)}>
+                <FontAwesomeIcon icon={faFilePdf} style={{ width: '1rem', marginRight: '0.4rem' }} /> PDF (.pdf)
+              </button>
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onClick={() => executeFileAction(onExportLatex)}>
+                <FontAwesomeIcon icon={faFileCode} style={{ width: '1rem', marginRight: '0.4rem' }} /> LaTeX (.tex)
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className={`file-menu-drawer edit-menu-drawer${isEditMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Edit">
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canUndo} onClick={() => executeEditAction(onUndo)}>
+          <FontAwesomeIcon icon={faArrowRotateLeft} style={{ width: '1rem', marginRight: '0.4rem' }} /> Undo
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canRedo} onClick={() => executeEditAction(onRedo)}>
+          <FontAwesomeIcon icon={faArrowRotateRight} style={{ width: '1rem', marginRight: '0.4rem' }} /> Redo
+        </button>
+        <div className="menu-divider" />
+        <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => document.execCommand('cut'))}>
+          <FontAwesomeIcon icon={faScissors} style={{ width: '1rem', marginRight: '0.4rem' }} /> Cut
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => document.execCommand('copy'))}>
+          <FontAwesomeIcon icon={faCopy} style={{ width: '1rem', marginRight: '0.4rem' }} /> Copy
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(async () => {
+          try {
+            const text = await navigator.clipboard.readText()
+            document.execCommand('insertText', false, text)
+          } catch(e) {
+            console.error(e)
+          }
+        })}>
+          <FontAwesomeIcon icon={faPaste} style={{ width: '1rem', marginRight: '0.4rem' }} /> Paste
+        </button>
+      </div>
     </header>
   )
 }
-

@@ -10,7 +10,7 @@ import {
 import { NotebookEditor } from './components/notebook/NotebookEditor'
 import { CustomScrollbar } from './components/scrollbar/CustomScrollbar'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
-import type { CellInsertHandle } from './components/cell/CellEditor'
+import type { CellChangeKind, CellChangeMetadata, CellInsertHandle, EditorSelectionState, TextFormatCommand } from './components/cell/CellEditor'
 
 import './App.css'
 import { renderPrintableNotebook } from './print/renderPrintableNotebook'
@@ -49,6 +49,43 @@ function isDocumentBlank(document: NotebookDocument): boolean {
   return document.cells.every((cell) => !cell.latex.trim())
 }
 
+const HISTORY_LIMIT = 100
+const TYPING_GROUP_TIMEOUT_MS = 1200
+
+interface HistoryEntry {
+  document: NotebookDocument
+  activeCellId: string | null
+  selection: EditorSelectionState | null
+}
+
+interface UpdateDocumentOptions {
+  captureVisibleEditorState?: boolean
+  changedCellId?: string
+  changeKind?: CellChangeKind
+  selectionBefore?: EditorSelectionState | null
+  inputType?: string
+  data?: string | null
+}
+
+interface TypingHistoryGroup {
+  cellId: string
+  kind: 'typing' | 'delete'
+  lastAt: number
+  lastDataWasWhitespace: boolean
+}
+
+function cloneDocument(document: NotebookDocument): NotebookDocument {
+  return {
+    ...document,
+    metadata: { ...document.metadata },
+    cells: document.cells.map((cell) => ({ ...cell })),
+  }
+}
+
+function documentsMatch(left: NotebookDocument, right: NotebookDocument): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
 function App() {
   const [document, setDocument] = useState<NotebookDocument | null>(null)
   const [filePath, setFilePath] = useState<string | null>(null)
@@ -57,7 +94,11 @@ function App() {
   const [, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
   const [documentRevision, setDocumentRevision] = useState(0)
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
+  const [pendingSelectionRestore, setPendingSelectionRestore] = useState<EditorSelectionState | null>(null)
   const activeCellHandleRef = useRef<CellInsertHandle | null>(null)
+  const typingHistoryGroupRef = useRef<TypingHistoryGroup | null>(null)
   const documentShellRef = useRef<HTMLElement | null>(null)
   const [isDirty, setIsDirty] = useState(false)
 
@@ -123,11 +164,27 @@ function App() {
     setRecentFiles(entries)
   }, [])
 
+  const documentWithVisibleEditorState = useCallback((sourceDocument: NotebookDocument): NotebookDocument => {
+    const activeLatex = activeCellId ? activeCellHandleRef.current?.getLatex() : null
+    if (!activeCellId || activeLatex === null || activeLatex === undefined) {
+      return sourceDocument
+    }
+
+    return {
+      ...sourceDocument,
+      cells: sourceDocument.cells.map((cell) => (cell.id === activeCellId ? { ...cell, latex: activeLatex } : cell)),
+    }
+  }, [activeCellId])
+
   const replaceDocument = (nextDocument: NotebookDocument, nextPath: string | null) => {
     setDocument(nextDocument)
     setFilePath(nextPath)
     setDocumentRevision((current) => current + 1)
     setActiveCellId(nextDocument.cells[0]?.id ?? null)
+    setUndoStack([])
+    setRedoStack([])
+    setPendingSelectionRestore(null)
+    typingHistoryGroupRef.current = null
     setIsDirty(false)
   }
 
@@ -169,10 +226,12 @@ function App() {
       return
     }
 
+    const currentDocument = documentWithVisibleEditorState(document)
+
     const nextDocument: NotebookDocument = {
-      ...document,
+      ...currentDocument,
       metadata: {
-        ...document.metadata,
+        ...currentDocument.metadata,
         updatedAt: new Date().toISOString(),
       },
     }
@@ -205,7 +264,7 @@ function App() {
     setFilePath(result.path)
     setIsDirty(false)
     await refreshRecentFiles()
-  }, [document, filePath, refreshRecentFiles])
+  }, [document, documentWithVisibleEditorState, filePath, refreshRecentFiles])
 
   useEffect(() => {
     if (!document || !filePath || !isDirty) {
@@ -221,23 +280,142 @@ function App() {
     }
   }, [document, filePath, isDirty, persistDocument])
 
-  const updateDocument = (updater: (current: NotebookDocument) => NotebookDocument) => {
+  const updateDocument = (
+    updater: (current: NotebookDocument) => NotebookDocument,
+    options: UpdateDocumentOptions = {},
+  ) => {
     setDocument((current) => {
       if (!current) {
         return current
       }
 
-      const next = updater(current)
+      const historySource = options.captureVisibleEditorState ? documentWithVisibleEditorState(current) : current
+      const next = updater(historySource)
+      if (documentsMatch(historySource, next)) {
+        return current
+      }
+
+      const now = Date.now()
+      const changedCellId = options.changedCellId ?? activeCellId
+      const changeKind = options.changeKind ?? 'other'
+      const isGroupedChange = (changeKind === 'typing' || changeKind === 'delete') && Boolean(changedCellId)
+      const previousGroup = typingHistoryGroupRef.current
+      const currentDataIsWhitespace = changeKind === 'typing' && Boolean(options.data) && /\s/.test(options.data ?? '')
+      const startsWordAfterWhitespace = changeKind === 'typing'
+        && Boolean(options.data)
+        && !/\s/.test(options.data ?? '')
+        && Boolean(previousGroup?.lastDataWasWhitespace)
+      const canReuseHistoryEntry = Boolean(
+        isGroupedChange
+        && previousGroup
+        && previousGroup.cellId === changedCellId
+        && previousGroup.kind === changeKind
+        && now - previousGroup.lastAt <= TYPING_GROUP_TIMEOUT_MS
+        && !startsWordAfterWhitespace,
+      )
+
+      if (!canReuseHistoryEntry) {
+        const previousEntry: HistoryEntry = {
+          document: cloneDocument(historySource),
+          activeCellId,
+          selection: options.selectionBefore ?? activeCellHandleRef.current?.getSelection() ?? null,
+        }
+        setUndoStack((stack) => [...stack.slice(Math.max(0, stack.length - HISTORY_LIMIT + 1)), previousEntry])
+      }
+
+      if (isGroupedChange && changedCellId) {
+        typingHistoryGroupRef.current = {
+          cellId: changedCellId,
+          kind: changeKind === 'delete' ? 'delete' : 'typing',
+          lastAt: now,
+          lastDataWasWhitespace: currentDataIsWhitespace,
+        }
+      } else {
+        typingHistoryGroupRef.current = null
+      }
+
+      setRedoStack([])
       setIsDirty(true)
       return next
     })
   }
 
-  const handleCellChange = (cellId: string, cell: NotebookCell) => {
+  const restoreHistoryEntry = useCallback((entry: HistoryEntry) => {
+    const nextDocument = cloneDocument(entry.document)
+    setDocument(nextDocument)
+    setDocumentRevision((current) => current + 1)
+    setActiveCellId(entry.activeCellId && nextDocument.cells.some((cell) => cell.id === entry.activeCellId)
+      ? entry.activeCellId
+      : nextDocument.cells[0]?.id ?? null)
+    setPendingSelectionRestore(entry.selection)
+    activeCellHandleRef.current = null
+    typingHistoryGroupRef.current = null
+    setIsDirty(true)
+  }, [])
+
+  const handleUndo = useCallback(() => {
+    if (!document || undoStack.length === 0) {
+      return
+    }
+
+    const previousEntry = undoStack[undoStack.length - 1]
+    const currentEntry: HistoryEntry = {
+      document: cloneDocument(documentWithVisibleEditorState(document)),
+      activeCellId,
+      selection: activeCellHandleRef.current?.getSelection() ?? null,
+    }
+
+    setUndoStack((stack) => stack.slice(0, -1))
+    setRedoStack((stack) => [...stack.slice(Math.max(0, stack.length - HISTORY_LIMIT + 1)), currentEntry])
+    restoreHistoryEntry(previousEntry)
+  }, [activeCellId, document, documentWithVisibleEditorState, restoreHistoryEntry, undoStack])
+
+  const handleRedo = useCallback(() => {
+    if (!document || redoStack.length === 0) {
+      return
+    }
+
+    const nextEntry = redoStack[redoStack.length - 1]
+    const currentEntry: HistoryEntry = {
+      document: cloneDocument(documentWithVisibleEditorState(document)),
+      activeCellId,
+      selection: activeCellHandleRef.current?.getSelection() ?? null,
+    }
+
+    setRedoStack((stack) => stack.slice(0, -1))
+    setUndoStack((stack) => [...stack.slice(Math.max(0, stack.length - HISTORY_LIMIT + 1)), currentEntry])
+    restoreHistoryEntry(nextEntry)
+  }, [activeCellId, document, documentWithVisibleEditorState, redoStack, restoreHistoryEntry])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.altKey) return
+
+      const key = event.key.toLowerCase()
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault()
+        handleUndo()
+      } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
+        event.preventDefault()
+        handleRedo()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleRedo, handleUndo])
+
+  const handleCellChange = (cellId: string, cell: NotebookCell, metadata?: CellChangeMetadata) => {
     updateDocument((current) => ({
       ...current,
       cells: current.cells.map((c) => (c.id === cellId ? cell : c)),
-    }))
+    }), {
+      changedCellId: cellId,
+      changeKind: metadata?.kind,
+      selectionBefore: metadata?.selectionBefore,
+      inputType: metadata?.inputType,
+      data: metadata?.data,
+    })
   }
 
   const handleMoveCell = (sourceCellId: string, targetCellId: string, position: 'before' | 'after') => {
@@ -272,7 +450,7 @@ function App() {
         ...current,
         cells: nextCells,
       }
-    })
+    }, { captureVisibleEditorState: true })
   }
 
   const handleRemoveCell = (cellId: string) => {
@@ -297,11 +475,11 @@ function App() {
         ...current,
         cells: currentSafeCells,
       }
-    })
+    }, { captureVisibleEditorState: true })
   }
 
-  const handleAddCellBelow = (targetCellId: string) => {
-    const nextCell = createNotebookCell()
+  const handleAddCell = (targetCellId: string, position: 'before' | 'after', initialLatex = '') => {
+    const nextCell = createNotebookCell(initialLatex)
     setActiveCellId(nextCell.id)
 
     updateDocument((current) => {
@@ -312,20 +490,33 @@ function App() {
       }
 
       const nextCells = [...current.cells]
-      nextCells.splice(targetIndex + 1, 0, nextCell)
+      nextCells.splice(targetIndex + (position === 'after' ? 1 : 0), 0, nextCell)
 
       return {
         ...current,
         cells: nextCells,
       }
-    })
+    }, { captureVisibleEditorState: true })
+  }
+
+  const handleAddCellBelow = (targetCellId: string, initialLatex = '') => {
+    handleAddCell(targetCellId, 'after', initialLatex)
+  }
+
+  const handleAddCellAbove = (targetCellId: string, initialLatex = '') => {
+    handleAddCell(targetCellId, 'before', initialLatex)
   }
 
   const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template' | 'func-slot') => {
     activeCellHandleRef.current?.insert(snippet, mode)
   }
 
+  const handleFormatText = (format: TextFormatCommand) => {
+    activeCellHandleRef.current?.format(format)
+  }
+
   const handleFocusCell = (cellId: string) => {
+    typingHistoryGroupRef.current = null
     setActiveCellId(cellId)
   }
 
@@ -387,12 +578,18 @@ function App() {
       <EditorToolbar
         hasActiveCell={activeCellId !== null}
         onInsertSnippet={handleInsertSnippet}
+        onFormatText={handleFormatText}
         canSave={Boolean(document)}
         onExportPdf={() => void handleExportPdf()}
+        onExportLatex={() => void persistDocument(true)}
         onNewNotebook={handleNewNotebook}
         onOpenNotebook={handleOpenNotebook}
         onSaveNotebook={() => void persistDocument(false)}
         onSaveNotebookAs={() => void persistDocument(true)}
+        canUndo={undoStack.length > 0}
+        canRedo={redoStack.length > 0}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
       />
       <div className="document-scroll-region">
         <section
@@ -417,9 +614,12 @@ function App() {
             document={document}
             documentRevision={documentRevision}
             onActivateCell={handleFocusCell}
+            onAddCellAbove={handleAddCellAbove}
             onAddCellBelow={handleAddCellBelow}
             onCellChange={handleCellChange}
             onInsertHandleReady={(handle) => { activeCellHandleRef.current = handle }}
+            pendingSelectionRestore={pendingSelectionRestore}
+            onSelectionRestoreComplete={() => setPendingSelectionRestore(null)}
             onMoveCell={handleMoveCell}
             onRemoveCell={handleRemoveCell}
             onFocusCell={handleFocusCell}

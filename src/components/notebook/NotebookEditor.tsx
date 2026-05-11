@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCode, faEye, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons'
 
-import { CellEditor, type CellInsertHandle } from '../cell/CellEditor'
+import { CellEditor, type CellChangeMetadata, type CellInsertHandle, type EditorSelectionState } from '../cell/CellEditor'
 import type { NotebookCell, NotebookDocument } from '../../shared/types/notebook'
 
 interface NotebookEditorProps {
@@ -10,12 +10,27 @@ interface NotebookEditorProps {
   document: NotebookDocument
   documentRevision: number
   onActivateCell: (cellId: string) => void
-  onAddCellBelow: (cellId: string) => void
-  onCellChange: (cellId: string, cell: NotebookCell) => void
+  onAddCellAbove: (cellId: string, initialLatex?: string) => void
+  onAddCellBelow: (cellId: string, initialLatex?: string) => void
+  onCellChange: (cellId: string, cell: NotebookCell, metadata?: CellChangeMetadata) => void
   onInsertHandleReady: (handle: CellInsertHandle) => void
+  pendingSelectionRestore: EditorSelectionState | null
+  onSelectionRestoreComplete: () => void
   onMoveCell: (sourceCellId: string, targetCellId: string, position: 'before' | 'after') => void
   onRemoveCell: (cellId: string) => void
   onFocusCell: (cellId: string) => void
+}
+
+type RowListKind = 'bulletList' | 'numberedList' | null
+
+const NUMBERED_LIST_CELL_PATTERN = /^\\begin\{enumerate\}\\item\s*([\s\S]*?)\\end\{enumerate\}$/
+const BULLET_LIST_CELL_PATTERN = /^\\begin\{itemize\}\\item\s*([\s\S]*?)\\end\{itemize\}$/
+
+function rowListKindFromLatex(latex: string): RowListKind {
+  const trimmed = latex.trim()
+  if (NUMBERED_LIST_CELL_PATTERN.test(trimmed)) return 'numberedList'
+  if (BULLET_LIST_CELL_PATTERN.test(trimmed)) return 'bulletList'
+  return null
 }
 
 export function NotebookEditor({
@@ -23,9 +38,12 @@ export function NotebookEditor({
   document,
   documentRevision,
   onActivateCell,
+  onAddCellAbove,
   onAddCellBelow,
   onCellChange,
   onInsertHandleReady,
+  pendingSelectionRestore,
+  onSelectionRestoreComplete,
   onMoveCell,
   onRemoveCell,
   onFocusCell,
@@ -34,10 +52,15 @@ export function NotebookEditor({
   const dragImageRef = useRef<HTMLElement | null>(null)
   const [latexViewCellIds, setLatexViewCellIds] = useState<Set<string>>(() => new Set())
   const [dragOverTarget, setDragOverTarget] = useState<{ targetCellId: string; position: 'before' | 'after' } | null>(null)
+  const [continuedNumberingCellIds, setContinuedNumberingCellIds] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     const liveCellIds = new Set(document.cells.map((cell) => cell.id))
     setLatexViewCellIds((current) => {
+      const next = new Set(Array.from(current).filter((cellId) => liveCellIds.has(cellId)))
+      return next.size === current.size ? current : next
+    })
+    setContinuedNumberingCellIds((current) => {
       const next = new Set(Array.from(current).filter((cellId) => liveCellIds.has(cellId)))
       return next.size === current.size ? current : next
     })
@@ -72,6 +95,37 @@ export function NotebookEditor({
   const sourceCellId = draggedCellId.current
   const cellsWithoutSource = sourceCellId ? document.cells.filter((cell) => cell.id !== sourceCellId) : document.cells
   const dropPreviewIndex = getDropPreviewIndex()
+  const rowListKindByCellId = new Map<string, RowListKind>()
+  const numberedListValueByCellId = new Map<string, number>()
+  const canContinueNumberingByCellId = new Map<string, boolean>()
+
+  let previousRowWasNumbered = false
+  let previousNumberedValue = 0
+  let lastSeenNumberedValue = 0
+
+  document.cells.forEach((row) => {
+    const rowKind = rowListKindFromLatex(row.latex)
+    rowListKindByCellId.set(row.id, rowKind)
+
+    if (rowKind !== 'numberedList') {
+      previousRowWasNumbered = false
+      return
+    }
+
+    const hasPreviousNumbering = lastSeenNumberedValue > 0
+    const shouldContinueFromLast = continuedNumberingCellIds.has(row.id) && !previousRowWasNumbered && hasPreviousNumbering
+    const nextValue = previousRowWasNumbered
+      ? previousNumberedValue + 1
+      : shouldContinueFromLast
+        ? lastSeenNumberedValue + 1
+        : 1
+
+    numberedListValueByCellId.set(row.id, nextValue)
+    canContinueNumberingByCellId.set(row.id, !previousRowWasNumbered && hasPreviousNumbering && !shouldContinueFromLast)
+    previousRowWasNumbered = true
+    previousNumberedValue = nextValue
+    lastSeenNumberedValue = nextValue
+  })
 
   return (
     <div className="notebook-editor" key={documentRevision}>
@@ -194,14 +248,28 @@ export function NotebookEditor({
               isActive={activeCellId === cell.id}
               viewMode={latexViewCellIds.has(cell.id) ? 'latex' : 'wysiwyg'}
               onActivate={() => onActivateCell(cell.id)}
-              onChange={(next) => onCellChange(cell.id, next)}
+              onChange={(next, metadata) => onCellChange(cell.id, next, metadata)}
               onInsertHandle={(handle) => {
                 if (activeCellId === cell.id) {
                   onInsertHandleReady(handle)
                 }
               }}
-              onAddCellBelow={() => onAddCellBelow(cell.id)}
+              pendingSelectionRestore={activeCellId === cell.id ? pendingSelectionRestore : null}
+              onSelectionRestoreComplete={onSelectionRestoreComplete}
+              onAddCellBelow={(initialLatex) => onAddCellBelow(cell.id, initialLatex)}
+              onAddCellAbove={(initialLatex) => onAddCellAbove(cell.id, initialLatex)}
               onDeleteCell={() => onRemoveCell(cell.id)}
+              rowListKind={rowListKindByCellId.get(cell.id) ?? null}
+              numberedListValue={numberedListValueByCellId.get(cell.id)}
+              canContinueNumbering={canContinueNumberingByCellId.get(cell.id) ?? false}
+              onContinueNumbering={() => {
+                setContinuedNumberingCellIds((current) => {
+                  if (current.has(cell.id)) return current
+                  const next = new Set(current)
+                  next.add(cell.id)
+                  return next
+                })
+              }}
               onFocusPrevious={() => {
                 const prevId = getPreviousCellId(cell.id)
                 if (prevId) onFocusCell(prevId)

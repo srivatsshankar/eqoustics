@@ -9,6 +9,28 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;')
 }
 
+function renderFormattedCell(latex: string): string | null {
+  const heading = latex.match(/^\\(section|subsection|subsubsection|paragraph)\{([\s\S]*)\}$/)
+  if (heading) {
+    const tag = heading[1] === 'section' ? 'h1' : heading[1] === 'subsection' ? 'h2' : heading[1] === 'subsubsection' ? 'h3' : 'h4'
+    return `<${tag}>${escapeHtml(heading[2])}</${tag}>`
+  }
+
+  const list = latex.match(/^\\begin\{(itemize|enumerate)\}([\s\S]*)\\end\{\1\}$/)
+  if (list) {
+    const tag = list[1] === 'itemize' ? 'ul' : 'ol'
+    const items = list[2]
+      .split(/\\item/g)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => `<li>${escapeHtml(item)}</li>`)
+      .join('')
+    return `<${tag}>${items}</${tag}>`
+  }
+
+  return null
+}
+
 /**
  * Render the notebook as a self-contained HTML document for print/PDF export.
  *
@@ -19,6 +41,8 @@ export function renderPrintableNotebook(document: NotebookDocument): string {
   const content = document.cells
     .map((cell) => {
       if (!cell.latex.trim()) return '' // skip empty cells
+      const formatted = renderFormattedCell(cell.latex.trim())
+      if (formatted) return `<section class="print-cell">${formatted}</section>`
       // Wrap in $$ for display-mode rendering by KaTeX auto-render
       return `<section class="print-cell">$$${escapeHtml(cell.latex)}$$</section>`
     })

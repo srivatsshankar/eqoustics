@@ -1,12 +1,44 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { NotebookCell } from '../../shared/types/notebook'
 
 type InsertMode = 'cmd' | 'write' | 'latex' | 'template' | 'func-slot'
+export type TextFormatCommand = 'bold' | 'italic' | 'underline' | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'bulletList' | 'numberedList'
+
+const ROW_BOUNDARY_CARET_MARGIN = 4
+const ROW_START_MATH_CARET_MARGIN = 16
+const ROW_START_MATH_CARET_RATIO = 0.5
 
 export interface CellInsertHandle {
   insert: (snippet: string, mode?: InsertMode) => void
+  format: (format: TextFormatCommand) => void
+  getLatex: () => string
+  getSelection: () => EditorSelectionState | null
+  restoreSelection: (selection: EditorSelectionState) => void
   focus: () => void
+}
+
+export type CellChangeKind = 'typing' | 'delete' | 'paste' | 'insert' | 'format' | 'other'
+
+export type EditorSelectionState =
+  | {
+    viewMode: 'wysiwyg'
+    anchorPath: number[]
+    anchorOffset: number
+    focusPath: number[]
+    focusOffset: number
+  }
+  | {
+    viewMode: 'latex'
+    selectionStart: number
+    selectionEnd: number
+  }
+
+export interface CellChangeMetadata {
+  kind: CellChangeKind
+  selectionBefore?: EditorSelectionState | null
+  inputType?: string
+  data?: string | null
 }
 
 interface CellEditorProps {
@@ -14,10 +46,17 @@ interface CellEditorProps {
   isActive: boolean
   viewMode: 'wysiwyg' | 'latex'
   onActivate: () => void
-  onChange: (cell: NotebookCell) => void
+  onChange: (cell: NotebookCell, metadata?: CellChangeMetadata) => void
   onInsertHandle: (handle: CellInsertHandle) => void
-  onAddCellBelow: () => void
+  pendingSelectionRestore?: EditorSelectionState | null
+  onSelectionRestoreComplete?: () => void
+  onAddCellAbove: (initialLatex?: string) => void
+  onAddCellBelow: (initialLatex?: string) => void
   onDeleteCell: () => void
+  rowListKind?: 'bulletList' | 'numberedList' | null
+  numberedListValue?: number
+  canContinueNumbering?: boolean
+  onContinueNumbering?: () => void
   onFocusPrevious: () => void
   onFocusNext: () => void
 }
@@ -151,9 +190,58 @@ const COMMAND_DISPLAY: Record<string, string> = {
   '\\min': 'min',
   '\\lbrace': '{',
   '\\rbrace': '}',
+  '\\lparen': '(',
+  '\\rparen': ')',
+  '\\lbrack': '[',
+  '\\rbrack': ']',
+  '\\langle': '&#10216;',
+  '\\rangle': '&#10217;',
+  '\\lang': '&#10216;',
+  '\\rang': '&#10217;',
+  '\\lt': '&lt;',
+  '\\gt': '&gt;',
+  '\\lceil': '&#8968;',
+  '\\rceil': '&#8969;',
+  '\\lfloor': '&#8970;',
+  '\\rfloor': '&#8971;',
+  '\\lmoustache': '&#9136;',
+  '\\rmoustache': '&#9137;',
+  '\\lgroup': '&#10222;',
+  '\\rgroup': '&#10223;',
+  '\\ulcorner': '&#8988;',
+  '\\urcorner': '&#8989;',
+  '\\llcorner': '&#8990;',
+  '\\lrcorner': '&#8991;',
+  '\\llbracket': '&#10214;',
+  '\\rrbracket': '&#10215;',
+  '\\lBrace': '&#10627;',
+  '\\rBrace': '&#10628;',
+  '\\vert': '|',
+  '\\Vert': '&#8214;',
+  '\\lvert': '|',
+  '\\rvert': '|',
+  '\\lVert': '&#8214;',
+  '\\rVert': '&#8214;',
+  '\\uparrow': '&uarr;',
+  '\\downarrow': '&darr;',
+  '\\updownarrow': '&#8597;',
+  '\\Uparrow': '&#8657;',
+  '\\Downarrow': '&#8659;',
+  '\\Updownarrow': '&#8661;',
+  '\\backslash': '\\',
 }
 
 const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix'])
+const SIZED_LEFT_DELIMITER_COMMANDS: Record<string, string> = {
+  '\\bigl': '\\bigr',
+  '\\Bigl': '\\Bigr',
+  '\\biggl': '\\biggr',
+  '\\Biggl': '\\Biggr',
+  '\\big': '\\big',
+  '\\Big': '\\Big',
+  '\\bigg': '\\bigg',
+  '\\Bigg': '\\Bigg',
+}
 const VISUAL_FUNCTION_COMMANDS = new Set([
   '\\arcsin',
   '\\arccos',
@@ -209,6 +297,33 @@ const VISUAL_FUNCTION_COMMANDS = new Set([
 ])
 const CARET_ANCHOR = '\u200b'
 
+const INLINE_FORMAT_COMMANDS: Record<string, TextFormatCommand> = {
+  '\\mathbf': 'bold',
+  '\\textbf': 'bold',
+  '\\mathit': 'italic',
+  '\\textit': 'italic',
+  '\\underline': 'underline',
+}
+
+const HEADING_COMMANDS: Record<string, TextFormatCommand> = {
+  '\\section': 'heading1',
+  '\\subsection': 'heading2',
+  '\\subsubsection': 'heading3',
+  '\\paragraph': 'heading4',
+}
+
+const LATEX_INLINE_FORMATS: Record<TextFormatCommand, [string, string]> = {
+  bold: ['\\mathbf{', '}'],
+  italic: ['\\mathit{', '}'],
+  underline: ['\\underline{', '}'],
+  heading1: ['\\section{', '}'],
+  heading2: ['\\subsection{', '}'],
+  heading3: ['\\subsubsection{', '}'],
+  heading4: ['\\paragraph{', '}'],
+  bulletList: ['\\begin{itemize}\\item ', '\\end{itemize}'],
+  numberedList: ['\\begin{enumerate}\\item ', '\\end{enumerate}'],
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -232,12 +347,12 @@ function escapeMathText(value: string): string {
 function commandHtml(command: string): string {
   const fallback = command.startsWith('\\') ? command.slice(1) : command
   const display = COMMAND_DISPLAY[command] ?? escapeHtml(fallback)
-  return `<span class="math-symbol" data-latex="${escapeAttr(command)}">${display}</span>`
+  return `<span class="math-symbol" data-latex="${escapeAttr(command)}" contenteditable="false">${display}</span>`
 }
 
 function operatorNameHtml(command: '\\operatorname' | '\\operatorname*', body: string): string {
   const latex = `${command}{${body}}`
-  return `<span class="math-symbol" data-latex="${escapeAttr(latex)}">${escapeHtml(body)}</span>`
+  return `<span class="math-symbol" data-latex="${escapeAttr(latex)}" contenteditable="false">${escapeHtml(body)}</span>`
 }
 
 function slotHtml(role: string, content = '', marker = false, className = ''): string {
@@ -277,8 +392,110 @@ function textHtml(body = '', focusBody = false): string {
   return `<span class="math-text" data-math="text">${slotHtml('text', escapeHtml(body), focusBody)}</span>`
 }
 
-function delimiterHtml(left: string, right: string, body = '', focusBody = false): string {
-  return `<span class="math-delimiter" data-math="delimiter" data-left="${escapeAttr(left)}" data-right="${escapeAttr(right)}"><span class="math-delimiter-mark">${escapeHtml(left)}</span>${slotHtml('body', body, focusBody)}<span class="math-delimiter-mark">${escapeHtml(right)}</span></span>`
+function formatHtml(format: TextFormatCommand, content = '', marker = false): string {
+  const markerHtml = marker ? '<span data-caret-marker="true"></span>' : ''
+  const className = `text-format text-format-${format}`
+  return `<span class="${className}" data-format="${format}">${markerHtml}${content}</span>`
+}
+
+function listHtml(format: 'bulletList' | 'numberedList', content = '', marker = false, number = 1): string {
+  const markerHtml = marker ? '<span data-caret-marker="true"></span>' : ''
+  const markerClass = format === 'bulletList' ? 'text-list-bullet-marker' : 'text-list-number-marker'
+  const numberAttr = format === 'numberedList' ? ` data-number="${number}"` : ''
+  const nestedParentClass = content.trim().startsWith('<span class="text-list') ? ' text-list-nested-parent' : ''
+  return `<span class="text-list text-list-${format}${nestedParentClass}" data-list="${format}"><span class="${markerClass}"${numberAttr} contenteditable="false"></span><span class="text-list-content">${markerHtml}${content}</span></span>`
+}
+
+function oversetHtml(bound = '', base = '', focusBound = false): string {
+  return [
+    '<span class="math-overset" data-math="overset">',
+    `<span class="math-overset-bound">${slotHtml('bound', bound, focusBound)}</span>`,
+    slotHtml('base', base),
+    '</span>',
+  ].join('')
+}
+
+function undersetHtml(bound = '', base = '', focusBound = false): string {
+  return [
+    '<span class="math-underset" data-math="underset">',
+    slotHtml('base', base),
+    `<span class="math-underset-bound">${slotHtml('bound', bound, focusBound)}</span>`,
+    '</span>',
+  ].join('')
+}
+
+function bothsetHtml(upper = '', base = '', lower = '', focusUpper = false): string {
+  return [
+    '<span class="math-bothset" data-math="bothset">',
+    `<span class="math-overset-bound">${slotHtml('upper-bound', upper, focusUpper)}</span>`,
+    slotHtml('base', base),
+    `<span class="math-underset-bound">${slotHtml('lower-bound', lower)}</span>`,
+    '</span>',
+  ].join('')
+}
+
+function delimiterDisplay(delimiter: string): string {
+  const delimiterDisplays: Record<string, string> = {
+    '\\lparen': '(',
+    '\\rparen': ')',
+    '\\lbrack': '[',
+    '\\rbrack': ']',
+    '\\lbrace': '{',
+    '\\rbrace': '}',
+    '\\langle': '\u27e8',
+    '\\rangle': '\u27e9',
+    '\\lang': '\u27e8',
+    '\\rang': '\u27e9',
+    '\\lt': '<',
+    '\\gt': '>',
+    '\\lceil': '\u2308',
+    '\\rceil': '\u2309',
+    '\\lfloor': '\u230a',
+    '\\rfloor': '\u230b',
+    '\\lmoustache': '\u23b0',
+    '\\rmoustache': '\u23b1',
+    '\\lgroup': '\u27ee',
+    '\\rgroup': '\u27ef',
+    '\\ulcorner': '\u231c',
+    '\\urcorner': '\u231d',
+    '\\llcorner': '\u231e',
+    '\\lrcorner': '\u231f',
+    '\\llbracket': '\u27e6',
+    '\\rrbracket': '\u27e7',
+    '\\lBrace': '\u2983',
+    '\\rBrace': '\u2984',
+    '\\vert': '|',
+    '\\Vert': '\u2016',
+    '\\lvert': '|',
+    '\\rvert': '|',
+    '\\lVert': '\u2016',
+    '\\rVert': '\u2016',
+    '\\uparrow': '\u2191',
+    '\\downarrow': '\u2193',
+    '\\updownarrow': '\u2195',
+    '\\Uparrow': '\u21d1',
+    '\\Downarrow': '\u21d3',
+    '\\Updownarrow': '\u21d5',
+    '\\backslash': '\\',
+    '.': '',
+  }
+
+  if (delimiter === '\\{') return '{'
+  if (delimiter === '\\}') return '}'
+  if (delimiterDisplays[delimiter] !== undefined) return delimiterDisplays[delimiter]
+  return COMMAND_DISPLAY[delimiter] ?? delimiter
+}
+
+function delimiterSizeName(command: string): string {
+  if (command === '\\bigl' || command === '\\big') return 'big'
+  if (command === '\\Bigl' || command === '\\Big') return 'Big'
+  if (command === '\\biggl' || command === '\\bigg') return 'bigg'
+  if (command === '\\Biggl' || command === '\\Bigg') return 'Bigg'
+  return command === '\\left' ? 'auto' : 'plain'
+}
+
+function delimiterHtml(left: string, right: string, body = '', focusBody = false, leftCommand = '\\left', rightCommand = '\\right'): string {
+  return `<span class="math-delimiter" data-math="delimiter" data-left="${escapeAttr(left)}" data-right="${escapeAttr(right)}" data-left-command="${escapeAttr(leftCommand)}" data-right-command="${escapeAttr(rightCommand)}" data-delimiter-size="${escapeAttr(delimiterSizeName(leftCommand))}"><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(delimiterDisplay(left))}</span>${slotHtml('body', body, focusBody)}<span class="math-delimiter-mark" contenteditable="false">${escapeHtml(delimiterDisplay(right))}</span></span>`
 }
 
 function matrixHtml(env: string, rows: string[][], focusFirstCell = false): string {
@@ -391,6 +608,65 @@ function tryRenderMatrix(source: string, index: number): { html: string; end: nu
   return { html: matrixHtml(env, rows.length ? rows : [['']]), end: bodyEnd + endToken.length }
 }
 
+function matchingListEnvironmentEnd(source: string, bodyStart: number, env: 'itemize' | 'enumerate'): number {
+  const tokenPattern = /\\(?:begin|end)\{(itemize|enumerate)\}/g
+  const stack: Array<'itemize' | 'enumerate'> = [env]
+  tokenPattern.lastIndex = bodyStart
+
+  for (let match = tokenPattern.exec(source); match; match = tokenPattern.exec(source)) {
+    const token = match[0]
+    const tokenEnv = match[1] as 'itemize' | 'enumerate'
+    if (token.startsWith('\\begin')) {
+      stack.push(tokenEnv)
+      continue
+    }
+
+    if (stack[stack.length - 1] === tokenEnv) stack.pop()
+    if (stack.length === 0) return match.index
+  }
+
+  return -1
+}
+
+function splitTopLevelListItems(body: string): string[] {
+  const tokenPattern = /\\begin\{(itemize|enumerate)\}|\\end\{(itemize|enumerate)\}|\\item\b/g
+  const stack: Array<'itemize' | 'enumerate'> = []
+  const itemStarts: number[] = []
+
+  for (let match = tokenPattern.exec(body); match; match = tokenPattern.exec(body)) {
+    if (match[1]) {
+      stack.push(match[1] as 'itemize' | 'enumerate')
+    } else if (match[2]) {
+      if (stack[stack.length - 1] === match[2]) stack.pop()
+    } else if (stack.length === 0) {
+      itemStarts.push(match.index + match[0].length)
+    }
+  }
+
+  return itemStarts
+    .map((start, index) => body.slice(start, itemStarts[index + 1] ?? body.length).trim())
+    .filter(Boolean)
+}
+
+function tryRenderList(source: string, index: number): { html: string; end: number } | null {
+  const begin = source.slice(index).match(/^\\begin\{(itemize|enumerate)\}/)
+  if (!begin) return null
+
+  const env = begin[1] as 'itemize' | 'enumerate'
+  const bodyStart = index + begin[0].length
+  const endToken = `\\end{${env}}`
+  const bodyEnd = matchingListEnvironmentEnd(source, bodyStart, env)
+  if (bodyEnd < 0) return null
+
+  const items = splitTopLevelListItems(source.slice(bodyStart, bodyEnd))
+
+  const format = env === 'itemize' ? 'bulletList' : 'numberedList'
+  const content = items.length > 0
+    ? items.map((item, itemIndex) => listHtml(format, renderLatexToHtml(item), false, itemIndex + 1)).join('')
+    : listHtml(format)
+  return { html: content, end: bodyEnd + endToken.length }
+}
+
 function renderLeftRight(source: string, index: number): { html: string; end: number } | null {
   const leftCommand = '\\left'
   if (!source.startsWith(leftCommand, index)) return null
@@ -407,7 +683,31 @@ function renderLeftRight(source: string, index: number): { html: string; end: nu
   rightCursor = right.end
 
   return {
-    html: delimiterHtml(COMMAND_DISPLAY[left.command] ?? left.command, COMMAND_DISPLAY[right.command] ?? right.command, renderLatexToHtml(source.slice(cursor, rightIndex))),
+    html: delimiterHtml(left.command, right.command, renderLatexToHtml(source.slice(cursor, rightIndex))),
+    end: rightCursor,
+  }
+}
+
+function renderSizedDelimiter(source: string, index: number): { html: string; end: number } | null {
+  const leftCommand = Object.keys(SIZED_LEFT_DELIMITER_COMMANDS)
+    .sort((left, right) => right.length - left.length)
+    .find((command) => source.startsWith(command, index))
+  if (!leftCommand) return null
+
+  let cursor = index + leftCommand.length
+  const left = source[cursor] === '\\' ? readCommand(source, cursor) : { command: source[cursor] ?? '', end: cursor + 1 }
+  cursor = left.end
+
+  const rightCommand = SIZED_LEFT_DELIMITER_COMMANDS[leftCommand]
+  const rightIndex = source.indexOf(rightCommand, cursor)
+  if (rightIndex < 0) return null
+
+  let rightCursor = rightIndex + rightCommand.length
+  const right = source[rightCursor] === '\\' ? readCommand(source, rightCursor) : { command: source[rightCursor] ?? '', end: rightCursor + 1 }
+  rightCursor = right.end
+
+  return {
+    html: delimiterHtml(left.command, right.command, renderLatexToHtml(source.slice(cursor, rightIndex)), false, leftCommand, rightCommand),
     end: rightCursor,
   }
 }
@@ -425,10 +725,24 @@ function renderLatexToHtml(latex: string): string {
       continue
     }
 
+    const sizedDelimiter = renderSizedDelimiter(source, index)
+    if (sizedDelimiter) {
+      html += sizedDelimiter.html
+      index = sizedDelimiter.end
+      continue
+    }
+
     const leftRight = renderLeftRight(source, index)
     if (leftRight) {
       html += leftRight.html
       index = leftRight.end
+      continue
+    }
+
+    const list = tryRenderList(source, index)
+    if (list) {
+      html += list.html
+      index = list.end
       continue
     }
 
@@ -482,12 +796,67 @@ function renderLatexToHtml(latex: string): string {
         }
       }
 
+      if (INLINE_FORMAT_COMMANDS[command]) {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += formatHtml(INLINE_FORMAT_COMMANDS[command], renderLatexToHtml(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (HEADING_COMMANDS[command]) {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += formatHtml(HEADING_COMMANDS[command], renderLatexToHtml(group.body))
+          index = group.end
+          continue
+        }
+        // Accept non-braced heading content as a resilient fallback.
+        const rawBody = source.slice(end).trim()
+        html += formatHtml(HEADING_COMMANDS[command], renderLatexToHtml(rawBody))
+        index = source.length
+        continue
+      }
+
       const argument = VISUAL_FUNCTION_COMMANDS.has(command) ? readGroupAfterSpaces(source, end) : null
       if (argument) {
         html += commandHtml(command)
         html += slotHtml('function-arg', renderSlotLatex(argument.body))
         index = argument.end
         continue
+      }
+
+      if (command === '\\overset') {
+        const bound = readGroup(source, end)
+        const base = bound ? readGroupAfterSpaces(source, bound.end) : null
+        if (bound && base) {
+          const baseSource = base.body.trim()
+          const nestedUnderset = baseSource.startsWith('\\underset') ? readCommand(baseSource, 0) : null
+          const lower = nestedUnderset?.command === '\\underset' ? readGroup(baseSource, nestedUnderset.end) : null
+          const nestedBase = lower ? readGroupAfterSpaces(baseSource, lower.end) : null
+          html += lower && nestedBase && nestedBase.end === baseSource.length
+            ? bothsetHtml(renderSlotLatex(bound.body), renderSlotLatex(nestedBase.body), renderSlotLatex(lower.body))
+            : oversetHtml(renderSlotLatex(bound.body), renderSlotLatex(base.body))
+          index = base.end
+          continue
+        }
+      }
+
+      if (command === '\\underset') {
+        const bound = readGroup(source, end)
+        const base = bound ? readGroupAfterSpaces(source, bound.end) : null
+        if (bound && base) {
+          const baseSource = base.body.trim()
+          const nestedOverset = baseSource.startsWith('\\overset') ? readCommand(baseSource, 0) : null
+          const upper = nestedOverset?.command === '\\overset' ? readGroup(baseSource, nestedOverset.end) : null
+          const nestedBase = upper ? readGroupAfterSpaces(baseSource, upper.end) : null
+          html += upper && nestedBase && nestedBase.end === baseSource.length
+            ? bothsetHtml(renderSlotLatex(upper.body), renderSlotLatex(nestedBase.body), renderSlotLatex(bound.body))
+            : undersetHtml(renderSlotLatex(bound.body), renderSlotLatex(base.body))
+          index = base.end
+          continue
+        }
       }
 
       html += commandHtml(command)
@@ -537,6 +906,10 @@ function serializeFirstSlot(element: Element, role: string): string {
   return slot ? serializeChildren(slot).trim() : ''
 }
 
+function serializeSlot(element: Element, role: string): string {
+  return serializeDirectSlot(element, role) || serializeFirstSlot(element, role)
+}
+
 function isFunctionArgSlot(node: Node | null): boolean {
   return node instanceof HTMLElement && node.dataset.slot === 'function-arg'
 }
@@ -552,6 +925,24 @@ function serializeNode(node: Node): string {
 
   if (!(node instanceof HTMLElement)) return ''
   if (node.tagName === 'BR') return ' '
+
+  const formatKind = node.dataset.format as TextFormatCommand | undefined
+  if (formatKind && LATEX_INLINE_FORMATS[formatKind]) {
+    const [open, close] = LATEX_INLINE_FORMATS[formatKind]
+    return `${open}${serializeChildren(node).trim() || ' '}${close}`
+  }
+
+  const listKind = node.dataset.list as TextFormatCommand | undefined
+  if (listKind === 'bulletList' || listKind === 'numberedList') {
+    const [open, close] = LATEX_INLINE_FORMATS[listKind]
+    const content = Array.from(node.childNodes)
+      .filter((child) => !(child instanceof HTMLElement && child.classList.contains('text-list-bullet-marker')))
+      .filter((child) => !(child instanceof HTMLElement && child.classList.contains('text-list-number-marker')))
+      .map(serializeNode)
+      .join('')
+      .trim()
+    return `${open}${content || ' '}${close}`
+  }
 
   const symbolLatex = node.dataset.latex
   if (symbolLatex) return isFunctionArgSlot(node.nextSibling) ? symbolLatex : `${symbolLatex} `
@@ -577,6 +968,25 @@ function serializeNode(node: Node): string {
     return `\\sqrt[${index}]{${radicand}}`
   }
 
+  if (mathKind === 'overset') {
+    const bound = serializeSlot(node, 'bound') || ' '
+    const base = serializeSlot(node, 'base') || ' '
+    return `\\overset{${bound}}{${base}}`
+  }
+
+  if (mathKind === 'underset') {
+    const bound = serializeSlot(node, 'bound') || ' '
+    const base = serializeSlot(node, 'base') || ' '
+    return `\\underset{${bound}}{${base}}`
+  }
+
+  if (mathKind === 'bothset') {
+    const upper = serializeSlot(node, 'upper-bound') || ' '
+    const base = serializeSlot(node, 'base') || ' '
+    const lower = serializeSlot(node, 'lower-bound') || ' '
+    return `\\overset{${upper}}{\\underset{${lower}}{${base}}}`
+  }
+
   if (mathKind === 'sup') {
     const base = serializeDirectSlot(node, 'base')
     const script = serializeDirectSlot(node, 'script') || serializeFirstSlot(node, 'script') || ' '
@@ -597,7 +1007,9 @@ function serializeNode(node: Node): string {
   if (mathKind === 'delimiter') {
     const left = node.dataset.left ?? ''
     const right = node.dataset.right ?? ''
-    return `\\left${left}${serializeDirectSlot(node, 'body')}\\right${right}`
+    const leftCommand = node.dataset.leftCommand ?? '\\left'
+    const rightCommand = node.dataset.rightCommand ?? '\\right'
+    return `${leftCommand}${left}${serializeDirectSlot(node, 'body')}${rightCommand}${right}`
   }
 
   if (mathKind === 'matrix') {
@@ -662,12 +1074,16 @@ function htmlForSnippet(snippet: string, mode: InsertMode = 'write'): string {
     if (snippet === '\\sqrt') return sqrtHtml('', true)
     if (snippet === '\\sqrt[]') return indexedRootHtml('', '', true)
     if (snippet === '\\text') return textHtml('', true)
+    if (snippet === '\\overset') return oversetHtml('', '', true)
+    if (snippet === '\\underset') return undersetHtml('', '', true)
+    if (snippet === '\\bothset') return bothsetHtml('', '', '', true)
     return commandHtml(snippet)
   }
 
   if (snippet === '\\left|\\right|') return delimiterHtml('|', '|', '', true)
   if (snippet === '\\left(\\right)') return delimiterHtml('(', ')', '', true)
   if (snippet === '\\left[\\right]') return delimiterHtml('[', ']', '', true)
+  if (snippet === '\\left\\lbrace\\right\\rbrace') return delimiterHtml('\\lbrace', '\\rbrace', '', true)
 
   const rendered = renderLatexToHtml(getLatexSourceSnippet(snippet, mode))
   const hasExplicitPlaceholder = snippet.includes('#?') || snippet.includes('{ }')
@@ -681,6 +1097,77 @@ function selectionIsInside(root: HTMLElement): boolean {
   return Boolean(node && root.contains(node))
 }
 
+function nodePathFromRoot(root: Node, node: Node): number[] | null {
+  const path: number[] = []
+  let current: Node | null = node
+
+  while (current && current !== root) {
+    const parent: Node | null = current.parentNode
+    if (!parent) return null
+    let childIndex = -1
+    parent.childNodes.forEach((child, index) => {
+      if (child === current) childIndex = index
+    })
+    if (childIndex < 0) return null
+    path.unshift(childIndex)
+    current = parent
+  }
+
+  return current === root ? path : null
+}
+
+function nodeFromPath(root: Node, path: number[]): Node | null {
+  let current: Node | null = root
+
+  for (const index of path) {
+    if (!current || index < 0 || index >= current.childNodes.length) return null
+    current = current.childNodes[index]
+  }
+
+  return current
+}
+
+function safeRangeOffset(node: Node, offset: number): number {
+  if (node.nodeType === Node.TEXT_NODE) return Math.max(0, Math.min(offset, node.textContent?.length ?? 0))
+  return Math.max(0, Math.min(offset, node.childNodes.length))
+}
+
+function visualSelectionState(root: HTMLElement): EditorSelectionState | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.anchorNode || !selection.focusNode) return null
+  if (!root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return null
+
+  const anchorPath = nodePathFromRoot(root, selection.anchorNode)
+  const focusPath = nodePathFromRoot(root, selection.focusNode)
+  if (!anchorPath || !focusPath) return null
+
+  return {
+    viewMode: 'wysiwyg',
+    anchorPath,
+    anchorOffset: selection.anchorOffset,
+    focusPath,
+    focusOffset: selection.focusOffset,
+  }
+}
+
+function restoreVisualSelection(root: HTMLElement, selectionState: EditorSelectionState): boolean {
+  if (selectionState.viewMode !== 'wysiwyg') return false
+
+  const anchorNode = nodeFromPath(root, selectionState.anchorPath)
+  const focusNode = nodeFromPath(root, selectionState.focusPath)
+  const selection = window.getSelection()
+  if (!anchorNode || !focusNode || !selection) return false
+
+  root.focus()
+  selection.setBaseAndExtent(
+    anchorNode,
+    safeRangeOffset(anchorNode, selectionState.anchorOffset),
+    focusNode,
+    safeRangeOffset(focusNode, selectionState.focusOffset),
+  )
+  return true
+}
+
 function focusAtEnd(root: HTMLElement): void {
   const lastChild = root.lastChild
   if (lastChild) {
@@ -691,6 +1178,71 @@ function focusAtEnd(root: HTMLElement): void {
   const range = document.createRange()
   range.selectNodeContents(root)
   range.collapse(false)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+}
+
+function lastMeaningfulChild(node: Node): Node | null {
+  for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
+    const child = node.childNodes[index]
+    if (child.nodeType === Node.TEXT_NODE) {
+      if ((child.textContent ?? '').replace(/\u200b/g, '').length > 0) return child
+      continue
+    }
+    if (child instanceof HTMLElement && child.tagName !== 'BR') return child
+  }
+  return null
+}
+
+function focusAtLogicalRowEnd(root: HTMLElement): void {
+  const lastChild = lastMeaningfulChild(root)
+  if (!lastChild) {
+    focusAtEnd(root)
+    return
+  }
+
+  if (lastChild.nodeType === Node.TEXT_NODE) {
+    const text = lastChild.textContent ?? ''
+    const range = document.createRange()
+    range.setStart(lastChild, text.length)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    return
+  }
+
+  if (!(lastChild instanceof HTMLElement)) {
+    focusAtEnd(root)
+    return
+  }
+
+  const listContent = lastChild.matches('[data-list]')
+    ? listContentElement(lastChild)
+    : null
+  if (listContent) {
+    placeCaretInNode(listContent, true)
+    return
+  }
+
+  if (lastChild.dataset.format) {
+    placeCaretInNode(lastChild, true)
+    return
+  }
+
+  if (lastChild.classList.contains('math-slot')) {
+    placeCaretInNode(lastChild, true)
+    return
+  }
+
+  placeCaretAfterNode(lastChild)
+}
+
+function focusAtStart(root: HTMLElement): void {
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  range.collapse(true)
   const selection = window.getSelection()
   selection?.removeAllRanges()
   selection?.addRange(range)
@@ -711,6 +1263,18 @@ function placeCaretFromMarker(root: HTMLElement): void {
 }
 
 function placeCaretInNode(node: Node, atEnd = false): void {
+  if (node instanceof HTMLElement && node.classList.contains('math-slot') && node.childNodes.length === 0) {
+    const anchor = document.createTextNode(CARET_ANCHOR)
+    node.appendChild(anchor)
+    const range = document.createRange()
+    range.setStart(anchor, anchor.textContent?.length ?? 0)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    return
+  }
+
   const range = document.createRange()
   range.selectNodeContents(node)
   range.collapse(!atEnd)
@@ -751,12 +1315,52 @@ function placeCaretAfterNodeBoundary(node: Node): void {
 function placeCaretBeforeNode(node: Node): void {
   const parent = node.parentNode
   if (!parent) return
+  const previousSibling = node.previousSibling
+  const anchor = previousSibling?.nodeType === Node.TEXT_NODE ? previousSibling : document.createTextNode(CARET_ANCHOR)
+  if (anchor !== previousSibling) parent.insertBefore(anchor, node)
+
+  const anchorText = anchor.textContent ?? ''
+  if (!anchorText.endsWith(CARET_ANCHOR)) {
+    anchor.textContent = `${anchorText}${CARET_ANCHOR}`
+  }
+
   const range = document.createRange()
-  range.setStartBefore(node)
+  range.setStart(anchor, anchor.textContent?.length ?? 0)
   range.collapse(true)
   const selection = window.getSelection()
   selection?.removeAllRanges()
   selection?.addRange(range)
+}
+
+function rangeFromPoint(clientX: number, clientY: number): Range | null {
+  const pointDocument = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const position = pointDocument.caretPositionFromPoint?.(clientX, clientY)
+  if (position) {
+    const range = document.createRange()
+    range.setStart(position.offsetNode, position.offset)
+    range.collapse(true)
+    return range
+  }
+
+  return pointDocument.caretRangeFromPoint?.(clientX, clientY) ?? null
+}
+
+function placeCaretFromPoint(
+  root: HTMLElement,
+  event: { clientX: number; clientY: number },
+  scope: HTMLElement = root,
+): boolean {
+  const range = rangeFromPoint(event.clientX, event.clientY)
+  if (!range || !root.contains(range.startContainer) || !scope.contains(range.startContainer)) return false
+
+  root.focus()
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  return true
 }
 
 function selectNode(node: Node): void {
@@ -980,30 +1584,213 @@ function normalizeSelectionAroundMathElements(root: HTMLElement): void {
   selection.addRange(nextRange)
 }
 
-function moveToAdjacentSlot(root: HTMLElement, reverse = false): boolean {
-  const activeSlot = currentSlot(root)
-  const activeMathElement = activeSlot ? owningMathElement(activeSlot) : null
-  const slots = activeMathElement ? slotsOwnedByMathElement(activeMathElement) : Array.from(root.querySelectorAll<HTMLElement>('.math-slot'))
-  if (slots.length === 0) return false
+type TabTraversalEntry =
+  | { kind: 'row-end'; root: HTMLElement }
+  | { kind: 'slot'; element: HTMLElement; edge: 'start' | 'end' }
+  | { kind: 'element'; element: HTMLElement }
+  | { kind: 'word'; node: Text; start: number; end: number }
 
-  const activeIndex = activeSlot ? slots.indexOf(activeSlot) : -1
-  const nextIndex = reverse ? activeIndex - 1 : activeIndex + 1
+type TabTraversalResult = 'moved' | 'commit' | 'previous-row' | 'next-row' | 'none'
 
-  if (nextIndex < 0 || nextIndex >= slots.length) {
-    if (activeMathElement) {
-      if (reverse) {
-        placeCaretBeforeNode(activeMathElement)
-      } else {
-        placeCaretAfterNode(activeMathElement)
-      }
-    } else {
-      focusAtEnd(root)
-    }
-    return true
+function isListMarkerElement(element: HTMLElement): boolean {
+  return element.classList.contains('text-list-bullet-marker') || element.classList.contains('text-list-number-marker')
+}
+
+function collectWordEntries(node: Text, entries: TabTraversalEntry[]): void {
+  const text = node.textContent ?? ''
+  const wordPattern = /[^\s\u200b]+/g
+  for (let match = wordPattern.exec(text); match; match = wordPattern.exec(text)) {
+    entries.push({ kind: 'word', node, start: match.index, end: match.index + match[0].length })
+  }
+}
+
+function slotHasTabbableContent(slot: HTMLElement): boolean {
+  return serializeChildren(slot).trim().length > 0
+}
+
+function collectTabTraversalEntries(node: Node, root: HTMLElement, entries: TabTraversalEntry[]): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    collectWordEntries(node as Text, entries)
+    return
   }
 
-  placeCaretInNode(slots[nextIndex])
+  if (!(node instanceof HTMLElement) || node.tagName === 'BR' || !root.contains(node)) return
+  if (isListMarkerElement(node)) return
+
+  if (node.classList.contains('math-slot')) {
+    entries.push({ kind: 'slot', element: node, edge: 'start' })
+    if (slotHasTabbableContent(node)) entries.push({ kind: 'slot', element: node, edge: 'end' })
+    return
+  }
+
+  if (node.dataset.latex) {
+    entries.push({ kind: 'element', element: node })
+    return
+  }
+
+  if (node.dataset.math) {
+    if (node.querySelector('.math-slot')) {
+      node.childNodes.forEach((child) => collectTabTraversalEntries(child, root, entries))
+    } else {
+      entries.push({ kind: 'element', element: node })
+    }
+    return
+  }
+
+  if (node.getAttribute('contenteditable') === 'false') return
+
+  node.childNodes.forEach((child) => collectTabTraversalEntries(child, root, entries))
+}
+
+function tabTraversalEntries(root: HTMLElement): TabTraversalEntry[] {
+  const entries: TabTraversalEntry[] = []
+  root.childNodes.forEach((child) => collectTabTraversalEntries(child, root, entries))
+  entries.push({ kind: 'row-end', root })
+  return entries
+}
+
+function rangeForTabTraversalEntry(entry: TabTraversalEntry): Range {
+  const range = document.createRange()
+  if (entry.kind === 'row-end') {
+    range.selectNodeContents(entry.root)
+    range.collapse(false)
+    return range
+  }
+
+  if (entry.kind === 'word') {
+    range.setStart(entry.node, entry.start)
+    range.setEnd(entry.node, entry.end)
+    return range
+  }
+
+  if (entry.kind === 'slot') {
+    range.selectNodeContents(entry.element)
+    range.collapse(entry.edge === 'start')
+    return range
+  }
+
+  range.selectNode(entry.element)
+  return range
+}
+
+function collapsedRangesAreEqual(left: Range, right: Range): boolean {
+  return left.collapsed
+    && right.collapsed
+    && left.compareBoundaryPoints(Range.START_TO_START, right) === 0
+}
+
+function selectionSelectsElement(selection: Selection, element: HTMLElement): boolean {
+  if (selection.rangeCount === 0) return false
+  const range = selection.getRangeAt(0)
+  const parent = element.parentNode
+  if (!parent || range.startContainer !== parent || range.endContainer !== parent) return false
+  const index = Array.from(parent.childNodes).indexOf(element)
+  return range.startOffset === index && range.endOffset === index + 1
+}
+
+function selectionIsInsideTabEntry(selection: Selection, entry: TabTraversalEntry): boolean {
+  if (entry.kind === 'row-end') {
+    return selection.rangeCount > 0 && collapsedRangesAreEqual(selection.getRangeAt(0), rangeForTabTraversalEntry(entry))
+  }
+
+  if (entry.kind === 'word') {
+    return selection.isCollapsed
+      && selection.anchorNode === entry.node
+      && selection.anchorOffset >= entry.start
+      && selection.anchorOffset <= entry.end
+  }
+
+  if (entry.kind === 'slot') {
+    return selection.rangeCount > 0 && collapsedRangesAreEqual(selection.getRangeAt(0), rangeForTabTraversalEntry(entry))
+  }
+
+  return Boolean(selection.anchorNode && entry.element.contains(selection.anchorNode)) || selectionSelectsElement(selection, entry.element)
+}
+
+function placeCaretAtTabTraversalEntry(entry: TabTraversalEntry): void {
+  if (entry.kind === 'row-end') {
+    focusAtLogicalRowEnd(entry.root)
+    return
+  }
+
+  if (entry.kind === 'word') {
+    const range = document.createRange()
+    range.setStart(entry.node, entry.start)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    return
+  }
+
+  if (entry.kind === 'slot') {
+    placeCaretInNode(entry.element, entry.edge === 'end')
+    return
+  }
+
+  selectNode(entry.element)
+}
+
+function nextEntryIndexFromCaret(entries: TabTraversalEntry[], range: Range, reverse: boolean): number {
+  if (reverse) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entryRange = rangeForTabTraversalEntry(entries[index])
+      if (range.compareBoundaryPoints(Range.START_TO_END, entryRange) > 0) return index
+    }
+    return -1
+  }
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entryRange = rangeForTabTraversalEntry(entries[index])
+    if (range.compareBoundaryPoints(Range.START_TO_START, entryRange) <= 0) return index
+  }
+  return -1
+}
+
+function indentListAtContentStart(root: HTMLElement): boolean {
+  normalizeListCaret(root)
+  const list = activeListElement(root)
+  if (!list) return false
+
+  const format = list.dataset.list as 'bulletList' | 'numberedList' | undefined
+  if (format !== 'bulletList' && format !== 'numberedList') return false
+
+  const content = listContentElement(list)
+  if (!content || !caretIsAtElementEdge(content, false)) return false
+
+  content.innerHTML = listHtml(format, content.innerHTML, false, 1)
+  const nestedContent = content.querySelector<HTMLElement>(':scope > [data-list] > .text-list-content')
+  if (nestedContent) placeCaretInNode(nestedContent)
   return true
+}
+
+function moveToTabTraversalEntry(root: HTMLElement, reverse = false): TabTraversalResult {
+  if (!reverse && indentListAtContentStart(root)) return 'commit'
+
+  normalizeSelectionAroundMathElements(root)
+  if (!reverse && caretIsAtElementEdge(root, true)) return 'next-row'
+  if (reverse && caretIsAtElementEdge(root, false)) return 'previous-row'
+
+  const entries = tabTraversalEntries(root)
+  if (entries.length === 0) return reverse ? 'previous-row' : 'next-row'
+
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.anchorNode || !root.contains(selection.anchorNode)) {
+    placeCaretAtTabTraversalEntry(entries[reverse ? entries.length - 1 : 0])
+    return 'moved'
+  }
+
+  const activeIndex = entries.findIndex((entry) => selectionIsInsideTabEntry(selection, entry))
+  const nextIndex = activeIndex >= 0
+    ? activeIndex + (reverse ? -1 : 1)
+    : nextEntryIndexFromCaret(entries, selection.getRangeAt(0), reverse)
+
+  if (nextIndex >= 0 && nextIndex < entries.length) {
+    placeCaretAtTabTraversalEntry(entries[nextIndex])
+    return 'moved'
+  }
+
+  return reverse ? 'previous-row' : 'next-row'
 }
 
 function caretIsAtSlotEdge(slot: HTMLElement, atEnd: boolean): boolean {
@@ -1052,21 +1839,6 @@ function moveOutOfMathElement(root: HTMLElement, reverse = false): boolean {
   return true
 }
 
-function slotContentRect(slot: HTMLElement): DOMRect | null {
-  if (!slot.textContent?.replace(/\u200b/g, '').trim() && slot.children.length === 0) return null
-
-  const range = document.createRange()
-  range.selectNodeContents(slot)
-  const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0)
-  if (rects.length === 0) return null
-
-  const left = Math.min(...rects.map((rect) => rect.left))
-  const top = Math.min(...rects.map((rect) => rect.top))
-  const right = Math.max(...rects.map((rect) => rect.right))
-  const bottom = Math.max(...rects.map((rect) => rect.bottom))
-  return new DOMRect(left, top, right - left, bottom - top)
-}
-
 function rectsForNode(node: Node): DOMRect[] {
   if (node instanceof HTMLElement) return Array.from(node.getClientRects())
   if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.replace(/\u200b/g, '').trim()) return []
@@ -1076,21 +1848,56 @@ function rectsForNode(node: Node): DOMRect[] {
   return Array.from(range.getClientRects())
 }
 
-function placeCaretForEditorPointer(
+function rowLineRectEntries(
   root: HTMLElement,
-  event: { clientX: number; clientY: number; target: EventTarget | null },
-): boolean {
-  if (event.target !== root) return false
-
+  event: { clientY: number },
+): Array<{ node: Node; rect: DOMRect }> {
   const rectEntries = Array.from(root.childNodes).flatMap((node) => rectsForNode(node).map((rect) => ({ node, rect })))
-  if (rectEntries.length === 0) {
+  const sameLineEntries = rectEntries.filter(({ rect }) => event.clientY >= rect.top - 6 && event.clientY <= rect.bottom + 6)
+  return (sameLineEntries.length ? sameLineEntries : rectEntries).sort((a, b) => a.rect.left - b.rect.left)
+}
+
+function placeCaretForRowBoundaryPointer(
+  root: HTMLElement,
+  event: { clientX: number; clientY: number },
+): boolean {
+  const entries = rowLineRectEntries(root, event)
+  if (entries.length === 0) {
     root.focus()
     focusAtEnd(root)
     return true
   }
 
-  const sameLineEntries = rectEntries.filter(({ rect }) => event.clientY >= rect.top - 6 && event.clientY <= rect.bottom + 6)
-  const entries = (sameLineEntries.length ? sameLineEntries : rectEntries).sort((a, b) => a.rect.left - b.rect.left)
+  const firstEntry = entries[0]
+  const lastEntry = entries[entries.length - 1]
+  const firstEntryIsMath = firstEntry.node instanceof HTMLElement && Boolean(firstEntry.node.dataset.math)
+  const startMargin = firstEntryIsMath
+    ? Math.max(ROW_START_MATH_CARET_MARGIN, firstEntry.rect.width * ROW_START_MATH_CARET_RATIO)
+    : ROW_BOUNDARY_CARET_MARGIN
+  root.focus()
+
+  if (event.clientX <= firstEntry.rect.left + startMargin) {
+    placeCaretBeforeNode(firstEntry.node)
+    return true
+  }
+
+  if (event.clientX >= lastEntry.rect.right - ROW_BOUNDARY_CARET_MARGIN) {
+    placeCaretAfterNode(lastEntry.node)
+    return true
+  }
+
+  return false
+}
+
+function placeCaretForEditorPointer(
+  root: HTMLElement,
+  event: { clientX: number; clientY: number; target: EventTarget | null },
+): boolean {
+  if (event.target !== root) return false
+  if (placeCaretForRowBoundaryPointer(root, event)) return true
+  if (placeCaretFromPoint(root, event)) return true
+
+  const entries = rowLineRectEntries(root, event)
   const nextEntry = entries.find(({ rect }) => event.clientX < rect.left + rect.width / 2)
   root.focus()
 
@@ -1105,39 +1912,32 @@ function placeCaretForEditorPointer(
 
 function placeCaretForMathPointer(
   root: HTMLElement,
-  event: { clientX: number; target: EventTarget | null },
+  event: { clientX: number; clientY: number; target: EventTarget | null },
 ): boolean {
   if (!(event.target instanceof HTMLElement)) return false
 
   const mathElement = event.target.closest<HTMLElement>('[data-math]')
   if (!mathElement || !root.contains(mathElement)) return false
 
-  const mathRect = mathElement.getBoundingClientRect()
-  if (event.clientX >= mathRect.right - 2) {
-    root.focus()
-    placeCaretAfterNode(mathElement)
-    return true
-  }
-
   const slot = event.target.closest<HTMLElement>('.math-slot')
   if (slot) {
     if (owningMathElement(slot) !== mathElement) return false
-
-    const slots = slotsOwnedByMathElement(mathElement)
-    const slotIndex = slots.indexOf(slot)
-    const contentRect = slotContentRect(slot)
-    const slotRect = slot.getBoundingClientRect()
-    const clickIsNearSlotEnd = event.clientX >= slotRect.right - 2
-    const clickIsAfterSlotContent = contentRect
-      ? event.clientX >= Math.max(contentRect.right + 1, slotRect.left + slotRect.width * 0.58)
-      : event.clientX >= slotRect.left + slotRect.width * 0.58
-
-    if (slotIndex !== slots.length - 1 || (!clickIsNearSlotEnd && !clickIsAfterSlotContent)) return false
+    return placeCaretFromPoint(root, event, slot) || (root.focus(), placeCaretInNode(slot, true), true)
   }
 
-  root.focus()
-  placeCaretAfterNode(mathElement)
-  return true
+  const delimiterMark = event.target.closest<HTMLElement>('.math-delimiter-mark')
+  const mathRect = mathElement.getBoundingClientRect()
+  if (delimiterMark || event.clientX <= mathRect.left + 2 || event.clientX >= mathRect.right - 2) {
+    root.focus()
+    if (event.clientX < mathRect.left + mathRect.width / 2) {
+      placeCaretBeforeNode(mathElement)
+    } else {
+      placeCaretAfterNode(mathElement)
+    }
+    return true
+  }
+
+  return false
 }
 
 function placeCaretForCommandPointer(
@@ -1161,32 +1961,20 @@ function placeCaretForCommandPointer(
 
 function placeCaretForStandaloneSlotPointer(
   root: HTMLElement,
-  event: { clientX: number; target: EventTarget | null },
+  event: { clientX: number; clientY: number; target: EventTarget | null },
 ): boolean {
   if (!(event.target instanceof HTMLElement)) return false
 
   const slot = event.target.closest<HTMLElement>('.math-slot')
   if (!slot || !root.contains(slot) || owningMathElement(slot)) return false
 
-  const slotHasSavedContent = serializeChildren(slot).trim().length > 0
-  const contentRect = slotHasSavedContent ? slotContentRect(slot) : null
-  const slotRect = slot.getBoundingClientRect()
-  const isFunctionArgSlotElement = slot.dataset.slot === 'function-arg'
-  const clickIsNearSlotEnd = event.clientX >= slotRect.right - 2
-  const clickIsAfterSlotContent = contentRect
-    ? event.clientX >= Math.max(contentRect.right + 1, slotRect.left + slotRect.width * 0.58)
-    : event.clientX >= slotRect.left + slotRect.width * (isFunctionArgSlotElement ? 0.42 : 0.58)
-
-  if (!clickIsNearSlotEnd && !clickIsAfterSlotContent) return false
-
-  root.focus()
-  placeCaretAfterNodeBoundary(slot)
-  return true
+  return placeCaretFromPoint(root, event, slot) || (root.focus(), placeCaretInNode(slot, true), true)
 }
 
 function normalizeSelectionForTyping(root: HTMLElement): void {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0 || !selection.anchorNode || !root.contains(selection.anchorNode)) return
+  normalizeListCaret(root)
   if (currentSlot(root)) return
 
   const element = selection.anchorNode instanceof HTMLElement ? selection.anchorNode : selection.anchorNode.parentElement
@@ -1241,6 +2029,176 @@ function insertPlainTextAtSelection(root: HTMLElement, text: string): void {
   insertHtmlAtSelection(root, `${escapeHtml(text)}<span data-caret-marker="true"></span>`)
 }
 
+function activeListElement(root: HTMLElement): HTMLElement | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.anchorNode || !root.contains(selection.anchorNode)) return null
+
+  const element = selection.anchorNode instanceof HTMLElement ? selection.anchorNode : selection.anchorNode.parentElement
+  return element?.closest<HTMLElement>('[data-list]') ?? null
+}
+
+function listContentElement(list: HTMLElement): HTMLElement | null {
+  return list.querySelector<HTMLElement>(':scope > .text-list-content')
+}
+
+function listContentIsEmpty(list: HTMLElement): boolean {
+  const content = listContentElement(list)
+  return !content || serializeChildren(content).trim().length === 0
+}
+
+function fragmentIsVisuallyEmpty(fragment: DocumentFragment): boolean {
+  return (fragment.textContent ?? '').replace(/\u200b/g, '').length === 0
+    && fragment.querySelector('[data-math], [data-latex], [data-list], [data-slot]') == null
+}
+
+function caretIsAtElementEdge(element: HTMLElement, atEnd: boolean): boolean {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || !selection.anchorNode || !element.contains(selection.anchorNode)) return false
+
+  const range = selection.getRangeAt(0).cloneRange()
+  const comparisonRange = document.createRange()
+  comparisonRange.selectNodeContents(element)
+
+  if (atEnd) {
+    comparisonRange.setStart(range.endContainer, range.endOffset)
+  } else {
+    comparisonRange.setEnd(range.startContainer, range.startOffset)
+  }
+
+  return fragmentIsVisuallyEmpty(comparisonRange.cloneContents())
+}
+
+function firstRowListElement(root: HTMLElement): HTMLElement | null {
+  const firstMeaningfulChild = Array.from(root.childNodes).find((child) => {
+    if (child.nodeType === Node.TEXT_NODE) return Boolean((child.textContent ?? '').replace(/\u200b/g, '').trim())
+    return child instanceof HTMLElement && child.tagName !== 'BR'
+  })
+  return firstMeaningfulChild instanceof HTMLElement && firstMeaningfulChild.dataset.list ? firstMeaningfulChild : null
+}
+
+function normalizeListCaret(root: HTMLElement): boolean {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || !selection.anchorNode || !root.contains(selection.anchorNode)) return false
+
+  const element = selection.anchorNode instanceof HTMLElement ? selection.anchorNode : selection.anchorNode.parentElement
+  const list = element?.closest<HTMLElement>('[data-list]') ?? firstRowListElement(root)
+  if (!list) return false
+
+  const content = listContentElement(list)
+  if (!content || content.contains(selection.anchorNode)) return false
+
+  if (!list.contains(selection.anchorNode)) {
+    const listRange = document.createRange()
+    listRange.selectNode(list)
+    if (selection.getRangeAt(0).compareBoundaryPoints(Range.START_TO_START, listRange) > 0) return false
+  }
+
+  const contentRange = document.createRange()
+  contentRange.selectNodeContents(content)
+  const caretIsBeforeContent = selection.getRangeAt(0).compareBoundaryPoints(Range.START_TO_START, contentRange) <= 0
+  placeCaretInNode(content, !caretIsBeforeContent)
+  return true
+}
+
+function caretIsAtTrueRowStart(root: HTMLElement): boolean {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || !selection.anchorNode || !root.contains(selection.anchorNode)) return false
+  if (activeListElement(root)) return false
+
+  const range = selection.getRangeAt(0).cloneRange()
+  const before = document.createRange()
+  before.setStart(root, 0)
+  before.setEnd(range.startContainer, range.startOffset)
+  const fragment = before.cloneContents()
+  return (fragment.textContent ?? '').replace(/\u200b/g, '').length === 0 && fragment.querySelector?.('[data-math], [data-latex], [data-list]') == null
+}
+
+function removeEmptyListFormatting(root: HTMLElement): boolean {
+  const list = activeListElement(root) ?? firstRowListElement(root)
+  if (!list || !listContentIsEmpty(list)) return false
+
+  root.innerHTML = ''
+  focusAtEnd(root)
+  return true
+}
+
+function removeListFormattingAtContentStart(root: HTMLElement): boolean {
+  normalizeListCaret(root)
+  const list = activeListElement(root)
+  if (!list) return false
+
+  const content = listContentElement(list)
+  if (!content || !caretIsAtElementEdge(content, false)) return false
+
+  root.innerHTML = content.innerHTML
+  placeCaretInNode(root)
+  return true
+}
+
+function setNumberedListValue(root: HTMLElement, value?: number): void {
+  if (!value) return
+  root.querySelectorAll<HTMLElement>('.text-list-number-marker').forEach((marker) => {
+    marker.dataset.number = String(value)
+  })
+}
+
+function changeKindForInputType(inputType: string): CellChangeKind {
+  if (inputType === 'insertText') return 'typing'
+  if (inputType.startsWith('delete')) return 'delete'
+  if (inputType === 'insertFromPaste') return 'paste'
+  return 'other'
+}
+
+function applyFormatToLatexSource(textarea: HTMLTextAreaElement | null, currentLatex: string, format: TextFormatCommand): { latex: string; cursor: number } {
+  const [open, close] = LATEX_INLINE_FORMATS[format]
+  const start = textarea?.selectionStart ?? 0
+  const end = textarea?.selectionEnd ?? currentLatex.length
+  const selected = currentLatex.slice(start, end)
+  const body = selected || (format === 'bulletList' || format === 'numberedList' ? ' ' : '')
+  const latex = `${currentLatex.slice(0, start)}${open}${body}${close}${currentLatex.slice(end)}`
+  return { latex, cursor: start + open.length + body.length }
+}
+
+function applyFormatToVisualEditor(root: HTMLElement, format: TextFormatCommand, number = 1): void {
+  root.focus()
+  if (!selectionIsInside(root)) focusAtEnd(root)
+  normalizeSelectionAroundMathElements(root)
+
+  if (format === 'bulletList' || format === 'numberedList') {
+    const existingList = root.querySelector<HTMLElement>('[data-list]')
+    if (existingList?.dataset.list === format) {
+      root.innerHTML = listContentElement(existingList)?.innerHTML ?? ''
+      focusAtEnd(root)
+      return
+    }
+
+    root.innerHTML = listHtml(format, root.innerHTML, root.innerHTML.trim().length === 0, number)
+    const content = root.querySelector<HTMLElement>('.text-list-content')
+    if (content) placeCaretInNode(content, true)
+    return
+  }
+
+  const selection = window.getSelection()
+  const range = selection && selection.rangeCount > 0 && root.contains(selection.anchorNode) ? selection.getRangeAt(0) : null
+  if (range && !range.collapsed) {
+    const wrapper = document.createElement('span')
+    wrapper.className = `text-format text-format-${format}`
+    wrapper.dataset.format = format
+    wrapper.appendChild(range.extractContents())
+    range.insertNode(wrapper)
+    placeCaretAfterNode(wrapper)
+    return
+  }
+
+  const hasContent = serializeEditor(root).length > 0
+  if (hasContent) {
+    root.innerHTML = formatHtml(format, root.innerHTML)
+    focusAtEnd(root)
+  } else {
+    insertHtmlAtSelection(root, formatHtml(format, '', true))
+  }
+}
+
 export function CellEditor({
   cell,
   isActive,
@@ -1248,8 +2206,15 @@ export function CellEditor({
   onActivate,
   onChange,
   onInsertHandle,
+  pendingSelectionRestore = null,
+  onSelectionRestoreComplete,
+  onAddCellAbove,
   onAddCellBelow,
   onDeleteCell,
+  rowListKind = null,
+  numberedListValue,
+  canContinueNumbering = false,
+  onContinueNumbering,
   onFocusPrevious,
   onFocusNext,
 }: CellEditorProps) {
@@ -1260,28 +2225,64 @@ export function CellEditor({
   const onActivateRef = useRef(onActivate)
   const onChangeRef = useRef(onChange)
   const onInsertHandleRef = useRef(onInsertHandle)
+  const onSelectionRestoreCompleteRef = useRef(onSelectionRestoreComplete)
+  const onAddCellAboveRef = useRef(onAddCellAbove)
   const onAddCellBelowRef = useRef(onAddCellBelow)
   const onDeleteCellRef = useRef(onDeleteCell)
+  const onContinueNumberingRef = useRef(onContinueNumbering)
   const onFocusPreviousRef = useRef(onFocusPrevious)
   const onFocusNextRef = useRef(onFocusNext)
   const pointerStartRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const selectionPreviewFrameRef = useRef<number | null>(null)
+  const selectionBeforeInputRef = useRef<EditorSelectionState | null>(null)
+  const [listContextMenu, setListContextMenu] = useState<{ top: number; left: number } | null>(null)
 
   cellRef.current = cell
   onActivateRef.current = onActivate
   onChangeRef.current = onChange
   onInsertHandleRef.current = onInsertHandle
+  onSelectionRestoreCompleteRef.current = onSelectionRestoreComplete
+  onAddCellAboveRef.current = onAddCellAbove
   onAddCellBelowRef.current = onAddCellBelow
   onDeleteCellRef.current = onDeleteCell
+  onContinueNumberingRef.current = onContinueNumbering
   onFocusPreviousRef.current = onFocusPrevious
   onFocusNextRef.current = onFocusNext
 
-  const commitVisualEditor = useCallback(() => {
+  const getSelectionState = useCallback((): EditorSelectionState | null => {
+    if (viewMode === 'latex') {
+      const textarea = latexTextareaRef.current
+      if (!textarea) return null
+      return {
+        viewMode: 'latex',
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+      }
+    }
+
+    const editor = visualEditorRef.current
+    return editor ? visualSelectionState(editor) : null
+  }, [viewMode])
+
+  const restoreSelectionState = useCallback((selectionState: EditorSelectionState) => {
+    if (selectionState.viewMode === 'latex') {
+      const textarea = latexTextareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(selectionState.selectionStart, selectionState.selectionEnd)
+      return
+    }
+
+    const editor = visualEditorRef.current
+    if (editor) restoreVisualSelection(editor, selectionState)
+  }, [])
+
+  const commitVisualEditor = useCallback((metadata: CellChangeMetadata = { kind: 'other' }) => {
     const editor = visualEditorRef.current
     if (!editor) return
     const nextLatex = serializeEditor(editor)
     lastSyncedLatexRef.current = nextLatex
-    onChangeRef.current({ ...cellRef.current, latex: nextLatex })
+    onChangeRef.current({ ...cellRef.current, latex: nextLatex }, metadata)
   }, [])
 
   const insertIntoLatexSource = useCallback((snippet: string, mode: InsertMode = 'write') => {
@@ -1291,26 +2292,56 @@ export function CellEditor({
     const currentLatex = currentCell.latex || ''
     const start = textarea?.selectionStart ?? currentLatex.length
     const end = textarea?.selectionEnd ?? start
+    const selectionBefore = getSelectionState()
     const nextLatex = `${currentLatex.slice(0, start)}${latexSnippet}${currentLatex.slice(end)}`
     const nextCursor = start + latexSnippet.length
 
     lastSyncedLatexRef.current = nextLatex
-    onChangeRef.current({ ...currentCell, latex: nextLatex })
+    onChangeRef.current({ ...currentCell, latex: nextLatex }, { kind: 'insert', selectionBefore })
 
     window.requestAnimationFrame(() => {
       latexTextareaRef.current?.focus()
       latexTextareaRef.current?.setSelectionRange(nextCursor, nextCursor)
     })
-  }, [])
+  }, [getSelectionState])
 
   const insertIntoVisualEditor = useCallback((snippet: string, mode: InsertMode = 'write') => {
     const editor = visualEditorRef.current
     if (!editor) return
 
     onActivateRef.current()
+    const selectionBefore = visualSelectionState(editor)
     insertHtmlAtSelection(editor, htmlForSnippet(snippet, mode))
-    commitVisualEditor()
+    commitVisualEditor({ kind: 'insert', selectionBefore })
   }, [commitVisualEditor])
+
+  const formatLatexSource = useCallback((format: TextFormatCommand) => {
+    const currentCell = cellRef.current
+    const selectionBefore = getSelectionState()
+    const { latex, cursor } = applyFormatToLatexSource(latexTextareaRef.current, currentCell.latex || '', format)
+    lastSyncedLatexRef.current = latex
+    onChangeRef.current({ ...currentCell, latex }, { kind: 'format', selectionBefore })
+
+    window.requestAnimationFrame(() => {
+      latexTextareaRef.current?.focus()
+      latexTextareaRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }, [getSelectionState])
+
+  const formatVisualEditor = useCallback((format: TextFormatCommand) => {
+    const editor = visualEditorRef.current
+    if (!editor) return
+
+    onActivateRef.current()
+    const selectionBefore = visualSelectionState(editor)
+    applyFormatToVisualEditor(editor, format, numberedListValue ?? 1)
+    commitVisualEditor({ kind: 'format', selectionBefore })
+  }, [commitVisualEditor, numberedListValue])
+
+  const getCurrentLatex = useCallback(() => {
+    if (viewMode === 'latex') return latexTextareaRef.current?.value ?? cellRef.current.latex ?? ''
+    return visualEditorRef.current ? serializeEditor(visualEditorRef.current) : cellRef.current.latex ?? ''
+  }, [viewMode])
 
   const scheduleSelectionPreview = useCallback((editor: HTMLElement) => {
     if (selectionPreviewFrameRef.current !== null) return
@@ -1325,6 +2356,10 @@ export function CellEditor({
     if (viewMode === 'latex') {
       onInsertHandleRef.current({
         insert: insertIntoLatexSource,
+        format: formatLatexSource,
+        getLatex: getCurrentLatex,
+        getSelection: getSelectionState,
+        restoreSelection: restoreSelectionState,
         focus: () => latexTextareaRef.current?.focus(),
       })
       return
@@ -1332,9 +2367,13 @@ export function CellEditor({
 
     onInsertHandleRef.current({
       insert: insertIntoVisualEditor,
+      format: formatVisualEditor,
+      getLatex: getCurrentLatex,
+      getSelection: getSelectionState,
+      restoreSelection: restoreSelectionState,
       focus: () => visualEditorRef.current?.focus(),
     })
-  }, [insertIntoLatexSource, insertIntoVisualEditor, viewMode])
+  }, [formatLatexSource, formatVisualEditor, getCurrentLatex, getSelectionState, insertIntoLatexSource, insertIntoVisualEditor, restoreSelectionState, viewMode])
 
   useEffect(() => {
     syncHandle()
@@ -1354,10 +2393,23 @@ export function CellEditor({
     if (viewMode === 'latex') {
       latexTextareaRef.current?.focus()
     } else {
-      visualEditorRef.current?.focus()
+      const editor = visualEditorRef.current
+      editor?.focus()
+      if (editor && !selectionIsInside(editor)) focusAtStart(editor)
     }
     syncHandle()
   }, [isActive, syncHandle, viewMode])
+
+  useEffect(() => {
+    if (!isActive || !pendingSelectionRestore) return undefined
+
+    const frame = window.requestAnimationFrame(() => {
+      restoreSelectionState(pendingSelectionRestore)
+      onSelectionRestoreCompleteRef.current?.()
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [isActive, pendingSelectionRestore, restoreSelectionState])
 
   useEffect(() => {
     const editor = visualEditorRef.current
@@ -1367,38 +2419,83 @@ export function CellEditor({
     if (nextLatex === lastSyncedLatexRef.current) return
 
     editor.innerHTML = renderLatexToHtml(nextLatex)
+    setNumberedListValue(editor, numberedListValue)
     lastSyncedLatexRef.current = nextLatex
-  }, [cell.latex, viewMode])
+  }, [cell.latex, numberedListValue, viewMode])
 
   useEffect(() => {
     const editor = visualEditorRef.current
     if (!editor || viewMode !== 'wysiwyg') return
 
     editor.innerHTML = renderLatexToHtml(cellRef.current.latex || '')
+    setNumberedListValue(editor, numberedListValue)
     lastSyncedLatexRef.current = cellRef.current.latex || ''
-  }, [viewMode])
+  }, [numberedListValue, viewMode])
+
+  useEffect(() => {
+    const editor = visualEditorRef.current
+    if (!editor || viewMode !== 'wysiwyg') return
+    setNumberedListValue(editor, numberedListValue)
+  }, [numberedListValue, viewMode])
 
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Tab') {
       event.preventDefault()
-      moveToAdjacentSlot(event.currentTarget, event.shiftKey)
+      const result = moveToTabTraversalEntry(event.currentTarget, event.shiftKey)
+      if (result === 'commit') {
+        commitVisualEditor({ kind: 'other' })
+      } else if (result === 'previous-row') {
+        onFocusPreviousRef.current()
+      } else if (result === 'next-row') {
+        onFocusNextRef.current()
+      }
     } else if ((event.key === 'Backspace' || event.key === 'Delete') && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      const selectionBefore = visualSelectionState(event.currentTarget)
+      if (event.key === 'Backspace' && removeEmptyListFormatting(event.currentTarget)) {
+        event.preventDefault()
+        commitVisualEditor({ kind: 'delete', selectionBefore, inputType: 'deleteContentBackward' })
+        return
+      }
+      if (event.key === 'Backspace' && removeListFormattingAtContentStart(event.currentTarget)) {
+        event.preventDefault()
+        commitVisualEditor({ kind: 'delete', selectionBefore, inputType: 'deleteContentBackward' })
+        return
+      }
       normalizeSelectionAroundMathElements(event.currentTarget)
       const atomicDeleteResult = handleAtomicMathDelete(event.currentTarget, event.key === 'Backspace')
       if (atomicDeleteResult) {
         event.preventDefault()
-        if (atomicDeleteResult === 'deleted') commitVisualEditor()
+        if (atomicDeleteResult === 'deleted') {
+          commitVisualEditor({
+            kind: 'delete',
+            selectionBefore,
+            inputType: event.key === 'Backspace' ? 'deleteContentBackward' : 'deleteContentForward',
+          })
+        }
       } else if (caretIsAtProtectedSlotDeleteBoundary(event.currentTarget, event.key === 'Backspace')) {
         event.preventDefault()
       } else if (event.key === 'Backspace' && !serializeEditor(event.currentTarget).trim()) {
         onDeleteCellRef.current()
       }
     } else if (isTextInputKey(event)) {
+      const selectionBefore = visualSelectionState(event.currentTarget)
       clearSelectedMathElements(event.currentTarget)
       normalizeSelectionForTyping(event.currentTarget)
+      if (currentSlot(event.currentTarget)) {
+        event.preventDefault()
+        insertPlainTextAtSelection(event.currentTarget, event.key)
+        commitVisualEditor({ kind: 'typing', selectionBefore, inputType: 'insertText', data: event.key })
+      }
     } else if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
       event.preventDefault()
-      onAddCellBelowRef.current()
+      const selectionBefore = visualSelectionState(event.currentTarget)
+      if (removeEmptyListFormatting(event.currentTarget)) {
+        commitVisualEditor({ kind: 'delete', selectionBefore, inputType: 'deleteContentBackward' })
+      } else if (caretIsAtTrueRowStart(event.currentTarget)) {
+        onAddCellAboveRef.current()
+      } else {
+        onAddCellBelowRef.current()
+      }
     } else if (event.key === 'ArrowRight' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
       clearSelectedMathElements(event.currentTarget)
       if (moveOutOfMathElement(event.currentTarget)) event.preventDefault()
@@ -1418,6 +2515,7 @@ export function CellEditor({
     <div
       className={`cell-editor${isActive ? ' cell-editor-active' : ''}`}
       onPointerDown={(event) => {
+        setListContextMenu(null)
         onActivate()
         if (viewMode === 'wysiwyg' && event.target === event.currentTarget) {
           visualEditorRef.current?.focus()
@@ -1432,9 +2530,23 @@ export function CellEditor({
           spellCheck={false}
           aria-label="LaTeX source"
           onFocus={onActivate}
+          onBeforeInput={() => {
+            selectionBeforeInputRef.current = getSelectionState()
+          }}
           onChange={(event) => {
+            const nativeEvent = event.nativeEvent as InputEvent
+            const inputType = nativeEvent.inputType ?? 'insertText'
             lastSyncedLatexRef.current = event.target.value
-            onChange({ ...cell, latex: event.target.value })
+            onChange(
+              { ...cell, latex: event.target.value },
+              {
+                kind: changeKindForInputType(inputType),
+                selectionBefore: selectionBeforeInputRef.current,
+                inputType,
+                data: nativeEvent.data,
+              },
+            )
+            selectionBeforeInputRef.current = null
           }}
         />
       ) : (
@@ -1451,18 +2563,29 @@ export function CellEditor({
             pointerStartRef.current = null
             clearSelectedMathElements(event.currentTarget)
           }}
-          onBeforeInput={(event) => normalizeSelectionForTyping(event.currentTarget)}
-          onInput={commitVisualEditor}
+          onBeforeInput={(event) => {
+            selectionBeforeInputRef.current = visualSelectionState(event.currentTarget)
+            normalizeSelectionForTyping(event.currentTarget)
+          }}
+          onInput={(event) => {
+            const nativeEvent = event.nativeEvent as InputEvent
+            const inputType = nativeEvent.inputType ?? 'insertText'
+            commitVisualEditor({
+              kind: changeKindForInputType(inputType),
+              selectionBefore: selectionBeforeInputRef.current,
+              inputType,
+              data: nativeEvent.data,
+            })
+            selectionBeforeInputRef.current = null
+          }}
           onKeyDown={handleEditorKeyDown}
-          onKeyUp={(event) => normalizeSelectionAroundMathElements(event.currentTarget)}
+          onKeyUp={(event) => {
+            normalizeListCaret(event.currentTarget)
+            normalizeSelectionAroundMathElements(event.currentTarget)
+          }}
           onSelect={(event) => scheduleSelectionPreview(event.currentTarget)}
           onPointerDown={(event) => {
             clearSelectedMathElements(event.currentTarget)
-            if (placeCaretForStandaloneSlotPointer(event.currentTarget, event)) {
-              event.preventDefault()
-              pointerStartRef.current = null
-              return
-            }
             pointerStartRef.current = { clientX: event.clientX, clientY: event.clientY }
           }}
           onPointerMove={(event) => {
@@ -1497,27 +2620,51 @@ export function CellEditor({
               }
 
               if (
-                !placeCaretForMathPointer(editor, { clientX, target }) &&
+                !placeCaretForRowBoundaryPointer(editor, { clientX, clientY }) &&
+                !placeCaretForMathPointer(editor, { clientX, clientY, target }) &&
                 !placeCaretForCommandPointer(editor, { clientX, target }) &&
-                !placeCaretForStandaloneSlotPointer(editor, { clientX, target })
+                !placeCaretForStandaloneSlotPointer(editor, { clientX, clientY, target })
               ) {
                 placeCaretForEditorPointer(editor, { clientX, clientY, target })
               }
+              normalizeListCaret(editor)
             })
           }}
           onPointerCancel={(event) => {
             pointerStartRef.current = null
             clearSelectedMathElements(event.currentTarget)
           }}
-          onContextMenu={(event) => event.preventDefault()}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            const target = event.target instanceof HTMLElement ? event.target : null
+            const isNumberedListTarget = Boolean(target?.closest('.text-list-number-marker, .text-list-numberedList'))
+            if (rowListKind === 'numberedList' && canContinueNumbering && isNumberedListTarget) {
+              setListContextMenu({ top: event.clientY, left: event.clientX })
+            }
+          }}
           onPaste={(event) => {
             event.preventDefault()
+            const selectionBefore = visualSelectionState(event.currentTarget)
             insertPlainTextAtSelection(event.currentTarget, event.clipboardData.getData('text/plain'))
-            commitVisualEditor()
+            commitVisualEditor({ kind: 'paste', selectionBefore, inputType: 'insertFromPaste' })
           }}
         />
       )}
+      {listContextMenu ? (
+        <div className="list-context-menu" style={{ top: listContextMenu.top, left: listContextMenu.left }}>
+          <button
+            type="button"
+            className="list-context-menu-item"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              onContinueNumberingRef.current?.()
+              setListContextMenu(null)
+            }}
+          >
+            Continue numbering
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
-

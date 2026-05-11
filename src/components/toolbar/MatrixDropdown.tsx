@@ -1,8 +1,58 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface MatrixDropdownProps {
   disabled: boolean
   onInsertSnippet: (snippet: string, mode: 'cmd' | 'write' | 'latex' | 'template') => void
+}
+
+interface MatrixDelimiterOption {
+  id: string
+  label: string
+  preview: string
+  left: string
+  right: string
+}
+
+interface DelimiterSizeOption {
+  id: string
+  label: string
+  leftCommand: string
+  rightCommand: string
+}
+
+const MATRIX_DELIMITERS: MatrixDelimiterOption[] = [
+  { id: 'none', label: 'None', preview: 'A', left: '', right: '' },
+  { id: 'paren', label: 'Parentheses', preview: '( )', left: '(', right: ')' },
+  { id: 'bracket', label: 'Brackets', preview: '[ ]', left: '[', right: ']' },
+  { id: 'brace', label: 'Braces', preview: '{ }', left: '\\lbrace', right: '\\rbrace' },
+  { id: 'angle', label: 'Angles', preview: '< >', left: '\\langle', right: '\\rangle' },
+  { id: 'bar', label: 'Vertical bars', preview: '| |', left: '\\lvert', right: '\\rvert' },
+  { id: 'double-bar', label: 'Double bars', preview: '|| ||', left: '\\lVert', right: '\\rVert' },
+  { id: 'ceil', label: 'Ceiling', preview: '\u2308 \u2309', left: '\\lceil', right: '\\rceil' },
+  { id: 'floor', label: 'Floor', preview: '\u230a \u230b', left: '\\lfloor', right: '\\rfloor' },
+  { id: 'group', label: 'Groups', preview: '\u27ee \u27ef', left: '\\lgroup', right: '\\rgroup' },
+  { id: 'moustache', label: 'Moustaches', preview: '\u23b0 \u23b1', left: '\\lmoustache', right: '\\rmoustache' },
+  { id: 'upper-corner', label: 'Upper corners', preview: '\u231c \u231d', left: '\\ulcorner', right: '\\urcorner' },
+  { id: 'lower-corner', label: 'Lower corners', preview: '\u231e \u231f', left: '\\llcorner', right: '\\lrcorner' },
+  { id: 'llbracket', label: 'Double brackets', preview: '\u27e6 \u27e7', left: '\\llbracket', right: '\\rrbracket' },
+  { id: 'arrow-up', label: 'Up arrows', preview: '\u2191 \u2191', left: '\\uparrow', right: '\\uparrow' },
+  { id: 'arrow-down', label: 'Down arrows', preview: '\u2193 \u2193', left: '\\downarrow', right: '\\downarrow' },
+  { id: 'arrow-both', label: 'Up-down arrows', preview: '\u2195 \u2195', left: '\\updownarrow', right: '\\updownarrow' },
+  { id: 'double-arrow-up', label: 'Double up arrows', preview: '\u21d1 \u21d1', left: '\\Uparrow', right: '\\Uparrow' },
+  { id: 'double-arrow-down', label: 'Double down arrows', preview: '\u21d3 \u21d3', left: '\\Downarrow', right: '\\Downarrow' },
+  { id: 'double-arrow-both', label: 'Double up-down arrows', preview: '\u21d5 \u21d5', left: '\\Updownarrow', right: '\\Updownarrow' },
+]
+
+const DELIMITER_SIZES: DelimiterSizeOption[] = [
+  { id: 'auto', label: 'Auto', leftCommand: '\\left', rightCommand: '\\right' },
+  { id: 'small', label: 'Small', leftCommand: '\\bigl', rightCommand: '\\bigr' },
+  { id: 'medium', label: 'Medium', leftCommand: '\\Bigl', rightCommand: '\\Bigr' },
+  { id: 'large', label: 'Large', leftCommand: '\\biggl', rightCommand: '\\biggr' },
+  { id: 'largest', label: 'Largest', leftCommand: '\\Biggl', rightCommand: '\\Biggr' },
+]
+
+function parsedDimension(value: number | string): number {
+  return typeof value === 'string' ? parseInt(value, 10) : value
 }
 
 export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProps) {
@@ -11,6 +61,8 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
   const [hoverCols, setHoverCols] = useState(0)
   const [manualRows, setManualRows] = useState<number | string>(3)
   const [manualCols, setManualCols] = useState<number | string>(3)
+  const [delimiterId, setDelimiterId] = useState(MATRIX_DELIMITERS[1].id)
+  const [sizeId, setSizeId] = useState(DELIMITER_SIZES[0].id)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -27,152 +79,147 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
   const generateMatrixLatex = (rows: number, cols: number) => {
     const row = Array.from({ length: cols }, () => '#?').join(' & ')
     const body = Array.from({ length: rows }, () => row).join(' \\\\ ')
-    return `\\begin{pmatrix} ${body} \\end{pmatrix}`
+    const matrix = `\\begin{matrix} ${body} \\end{matrix}`
+    const delimiter = MATRIX_DELIMITERS.find((option) => option.id === delimiterId) ?? MATRIX_DELIMITERS[1]
+    if (!delimiter.left && !delimiter.right) return matrix
+
+    const size = DELIMITER_SIZES.find((option) => option.id === sizeId) ?? DELIMITER_SIZES[0]
+    return `${size.leftCommand}${delimiter.left}${matrix}${size.rightCommand}${delimiter.right}`
   }
 
-  const handleGridClick = (r: number, c: number) => {
-    onInsertSnippet(generateMatrixLatex(r, c), 'template')
+  const handleInsert = (rows: number, cols: number) => {
+    onInsertSnippet(generateMatrixLatex(rows, cols), 'template')
     setIsOpen(false)
   }
 
   const handleManualInsert = () => {
-    const r = typeof manualRows === 'string' ? parseInt(manualRows) : manualRows
-    const c = typeof manualCols === 'string' ? parseInt(manualCols) : manualCols
-    if (!isNaN(r) && !isNaN(c) && r > 0 && c > 0) {
-      onInsertSnippet(generateMatrixLatex(r, c), 'template')
-      setIsOpen(false)
+    const rows = parsedDimension(manualRows)
+    const cols = parsedDimension(manualCols)
+    if (!Number.isNaN(rows) && !Number.isNaN(cols) && rows > 0 && cols > 0) {
+      handleInsert(rows, cols)
     }
   }
 
   return (
-    <div className="toolbar-group toolbar-group-bordered matrix-dropdown-container" ref={dropdownRef} style={{ position: 'relative' }}>
+    <div className="toolbar-group toolbar-group-bordered matrix-dropdown-container" ref={dropdownRef}>
       <button
         type="button"
         className="symbol-btn"
         disabled={disabled}
-        onMouseDown={(e) => e.preventDefault()}
+        onMouseDown={(event) => event.preventDefault()}
         onClick={() => setIsOpen(!isOpen)}
       >
         Matrix
       </button>
 
-      {isOpen && (
-        <div
-          className="matrix-dropdown-popover"
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            zIndex: 1000,
-            background: '#ffffff',
-            border: '1px solid rgba(31, 41, 51, 0.12)',
-            borderRadius: '0.25rem',
-            padding: '1rem',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.75rem',
-            marginTop: '0.25rem',
-          }}
-        >
+      {isOpen ? (
+        <div className="matrix-dropdown-popover">
+          <div className="matrix-dropdown-section">
+            <span className="matrix-dropdown-label">Delimiters</span>
+            <div className="matrix-delimiter-grid" role="radiogroup" aria-label="Matrix delimiters">
+              {MATRIX_DELIMITERS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`matrix-option-button${delimiterId === option.id ? ' matrix-option-button-active' : ''}`}
+                  aria-label={option.label}
+                  aria-pressed={delimiterId === option.id}
+                  title={option.label}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setDelimiterId(option.id)}
+                >
+                  <span className="matrix-option-preview">{option.preview}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="matrix-dropdown-section">
+            <span className="matrix-dropdown-label">Bracket size</span>
+            <div className="matrix-size-row" role="radiogroup" aria-label="Matrix delimiter size">
+              {DELIMITER_SIZES.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`matrix-size-button${sizeId === option.id ? ' matrix-size-button-active' : ''}`}
+                  aria-pressed={sizeId === option.id}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setSizeId(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="matrix-dropdown-divider" />
+
           <div
             className="matrix-grid"
             onMouseLeave={() => {
               setHoverRows(0)
               setHoverCols(0)
             }}
-            style={{ display: 'grid', gap: '3px' }}
           >
-            {Array.from({ length: 10 }).map((_, rIndex) => (
-              <div key={rIndex} style={{ display: 'flex', gap: '3px' }}>
-                {Array.from({ length: 10 }).map((_, cIndex) => {
-                  const r = rIndex + 1
-                  const c = cIndex + 1
-                  const isHovered = r <= hoverRows && c <= hoverCols
+            {Array.from({ length: 10 }).map((_, rowIndex) => (
+              <div key={rowIndex} className="matrix-grid-row">
+                {Array.from({ length: 10 }).map((_, colIndex) => {
+                  const rows = rowIndex + 1
+                  const cols = colIndex + 1
+                  const isHovered = rows <= hoverRows && cols <= hoverCols
                   return (
                     <button
-                      key={cIndex}
+                      key={colIndex}
                       type="button"
-                      aria-label={`Insert ${r} by ${c} matrix`}
-                      onMouseDown={(e) => e.preventDefault()}
+                      className={`matrix-grid-cell${isHovered ? ' matrix-grid-cell-active' : ''}`}
+                      aria-label={`Insert ${rows} by ${cols} matrix`}
+                      onMouseDown={(event) => event.preventDefault()}
                       onMouseEnter={() => {
-                        setHoverRows(r)
-                        setHoverCols(c)
+                        setHoverRows(rows)
+                        setHoverCols(cols)
                       }}
-                      onClick={() => handleGridClick(r, c)}
-                      style={{
-                        width: '18px',
-                        height: '18px',
-                        padding: 0,
-                        border: isHovered ? '1px solid #2563eb' : '1px solid rgba(31, 41, 51, 0.2)',
-                        backgroundColor: isHovered ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-                        borderRadius: '2px',
-                        cursor: 'pointer',
-                        transition: 'background-color 100ms',
-                      }}
+                      onClick={() => handleInsert(rows, cols)}
                     />
                   )
                 })}
               </div>
             ))}
           </div>
-          <div style={{ textAlign: 'center', fontSize: '0.85rem', color: '#4b5563', minHeight: '1.2rem' }}>
-            {hoverRows > 0 && hoverCols > 0 ? `${hoverRows} × ${hoverCols}` : 'Hover to select size'}
+
+          <div className="matrix-hover-label">
+            {hoverRows > 0 && hoverCols > 0 ? `${hoverRows} x ${hoverCols}` : 'Hover to select matrix size'}
           </div>
-          <hr style={{ margin: '0', border: 'none', borderTop: '1px solid rgba(31, 41, 51, 0.1)' }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+
+          <div className="matrix-dropdown-divider" />
+
+          <div className="matrix-manual-row">
             <input
               type="number"
               min="1"
               value={manualRows}
-              onChange={(e) => {
-                const val = e.target.value
-                setManualRows(val === '' ? '' : parseInt(val) || '')
-              }}
-              style={{
-                width: '3rem',
-                padding: '0.25rem',
-                border: '1px solid rgba(31, 41, 51, 0.2)',
-                borderRadius: '0.12rem',
-                textAlign: 'center',
+              aria-label="Matrix rows"
+              onChange={(event) => {
+                const value = event.target.value
+                setManualRows(value === '' ? '' : parseInt(value, 10) || '')
               }}
             />
-            <span style={{ color: '#6b7280' }}>×</span>
+            <span>x</span>
             <input
               type="number"
               min="1"
               value={manualCols}
-              onChange={(e) => {
-                const val = e.target.value
-                setManualCols(val === '' ? '' : parseInt(val) || '')
-              }}
-              style={{
-                width: '3rem',
-                padding: '0.25rem',
-                border: '1px solid rgba(31, 41, 51, 0.2)',
-                borderRadius: '0.12rem',
-                textAlign: 'center',
+              aria-label="Matrix columns"
+              onChange={(event) => {
+                const value = event.target.value
+                setManualCols(value === '' ? '' : parseInt(value, 10) || '')
               }}
             />
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={handleManualInsert}
-              style={{
-                marginLeft: 'auto',
-                padding: '0.3rem 0.6rem',
-                background: '#f1f5f9',
-                border: '1px solid #e2e8f0',
-                borderRadius: '0.12rem',
-                cursor: 'pointer',
-                fontSize: '0.8rem',
-              }}
-            >
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={handleManualInsert}>
               Insert
             </button>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
