@@ -25,6 +25,7 @@ import {
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
 import { MatrixDropdown } from './MatrixDropdown'
 import type { TextFormatCommand } from '../cell/CellEditor'
+import { KATEX_COMMAND_PREVIEWS, KATEX_TEMPLATE_PREVIEWS } from '../../shared/katexPreviews'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
@@ -52,13 +53,47 @@ interface SymbolItem {
    * 'cmd'  → structural command (e.g. \frac creates a fraction with empty slots).
    * 'write' → literal LaTeX symbols, operators, etc.
    */
-  mode: 'cmd' | 'write'
+  mode: 'cmd' | 'write' | 'template'
 }
 
 interface SymbolGroup {
   label: string
   items: SymbolItem[]
 }
+
+function commandDisplay(value: string): string {
+  if (KATEX_COMMAND_PREVIEWS[value]) return KATEX_COMMAND_PREVIEWS[value]
+  if (value.startsWith('\\')) return value.slice(1)
+  return value
+}
+
+function commandTitle(value: string, label = commandDisplay(value)): string {
+  return `${label} (${value})`
+}
+
+function commandItems(values: string[]): SymbolItem[] {
+  return values.map((value) => ({
+    display: commandDisplay(value),
+    value,
+    title: commandTitle(value),
+    mode: value.startsWith('\\') ? 'cmd' : 'write',
+  }))
+}
+
+function templateItem(display: string, value: string, title = commandTitle(value, display)): SymbolItem {
+  return { display: KATEX_TEMPLATE_PREVIEWS[value] ?? display, value, title, mode: 'template' }
+}
+
+function templateItems(items: Array<[string, string, string?]>): SymbolItem[] {
+  return items.map(([display, value, title]) => templateItem(display, value, title))
+}
+
+const GREEK_ALIAS_VALUES = [
+  '\\Alpha', '\\Beta', '\\Epsilon', '\\Zeta', '\\Eta', '\\Iota', '\\Kappa', '\\Mu', '\\Nu',
+  '\\Omicron', '\\Rho', '\\Tau', '\\Chi', '\\omicron', '\\thetasym', '\\varGamma', '\\varDelta',
+  '\\varTheta', '\\varLambda', '\\varXi', '\\varPi', '\\varSigma', '\\varUpsilon', '\\varPhi',
+  '\\varPsi', '\\varOmega',
+]
 
 const SYMBOL_GROUPS: SymbolGroup[] = [
   {
@@ -179,6 +214,7 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       { display: 'œ', value: '\\oe', title: 'oe ligature (\\oe)', mode: 'cmd' },
       { display: 'ℵ', value: '\\alef', title: 'Aleph (\\alef)', mode: 'cmd' },
       { display: 'ℵ', value: '\\alefsym', title: 'Aleph (\\alefsym)', mode: 'cmd' },
+      ...commandItems(GREEK_ALIAS_VALUES),
     ],
   },
   {
@@ -277,12 +313,430 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       { display: 'varlimsup', value: '\\varlimsup', title: 'varlimsup (\\varlimsup)', mode: 'cmd' },
       { display: 'varprojlim', value: '\\varprojlim', title: 'varprojlim (\\varprojlim)', mode: 'cmd' },
       { display: 'f*', value: '\\operatorname*{f}', title: 'f (\\operatorname*{f})', mode: 'write' },
+      { display: 'f limits', value: '\\operatornamewithlimits{f}', title: 'f (\\operatornamewithlimits{f})', mode: 'write' },
     ],
+  },
+  {
+    label: 'Environments',
+    items: templateItems([
+      ['array', '\\begin{array}{#?}#?\\end{array}', 'Array environment'],
+      ['cases', '\\begin{cases}#?\\end{cases}', 'Cases environment'],
+      ['rcases', '\\begin{rcases}#?\\end{rcases}', 'Right cases environment'],
+      ['smallmatrix', '\\begin{smallmatrix}#?\\end{smallmatrix}', 'Small matrix environment'],
+      ['subarray', '\\begin{subarray}{#?}#?\\end{subarray}', 'Subarray environment'],
+      ['equation', '\\begin{equation}#?\\end{equation}', 'Equation environment'],
+      ['equation*', '\\begin{equation*}#?\\end{equation*}', 'Equation* environment'],
+      ['split', '\\begin{split}#?\\end{split}', 'Split environment'],
+      ['align', '\\begin{align}#?\\end{align}', 'Align environment'],
+      ['align*', '\\begin{align*}#?\\end{align*}', 'Align* environment'],
+      ['aligned', '\\begin{aligned}#?\\end{aligned}', 'Aligned environment'],
+      ['alignat', '\\begin{alignat}{#?}#?\\end{alignat}', 'Alignat environment'],
+      ['alignat*', '\\begin{alignat*}{#?}#?\\end{alignat*}', 'Alignat* environment'],
+      ['alignedat', '\\begin{alignedat}{#?}#?\\end{alignedat}', 'Alignedat environment'],
+      ['gather', '\\begin{gather}#?\\end{gather}', 'Gather environment'],
+      ['gather*', '\\begin{gather*}#?\\end{gather*}', 'Gather* environment'],
+      ['gathered', '\\begin{gathered}#?\\end{gathered}', 'Gathered environment'],
+      ['CD', '\\begin{CD}#?\\end{CD}', 'Commutative diagram environment'],
+      ['darray', '\\begin{darray}{#?}#?\\end{darray}', 'Display array environment'],
+      ['dcases', '\\begin{dcases}#?\\end{dcases}', 'Display cases environment'],
+      ['drcases', '\\begin{drcases}#?\\end{drcases}', 'Display right cases environment'],
+      ['matrix*', '\\begin{matrix*}[#?]#?\\end{matrix*}', 'Aligned matrix* environment'],
+      ['pmatrix*', '\\begin{pmatrix*}[#?]#?\\end{pmatrix*}', 'Aligned pmatrix* environment'],
+      ['bmatrix*', '\\begin{bmatrix*}[#?]#?\\end{bmatrix*}', 'Aligned bmatrix* environment'],
+      ['Bmatrix*', '\\begin{Bmatrix*}[#?]#?\\end{Bmatrix*}', 'Aligned Bmatrix* environment'],
+      ['vmatrix*', '\\begin{vmatrix*}[#?]#?\\end{vmatrix*}', 'Aligned vmatrix* environment'],
+      ['Vmatrix*', '\\begin{Vmatrix*}[#?]#?\\end{Vmatrix*}', 'Aligned Vmatrix* environment'],
+    ]),
+  },
+  {
+    label: 'Accents',
+    items: templateItems([
+      ['tilde', '\\tilde{#?}'],
+      ['widetilde', '\\widetilde{#?}'],
+      ['utilde', '\\utilde{#?}'],
+      ['acute', '\\acute{#?}'],
+      ['bar', '\\bar{#?}'],
+      ['breve', '\\breve{#?}'],
+      ['check', '\\check{#?}'],
+      ['dot', '\\dot{#?}'],
+      ['ddot', '\\ddot{#?}'],
+      ['dddot', '\\dddot{#?}'],
+      ['ddddot', '\\ddddot{#?}'],
+      ['grave', '\\grave{#?}'],
+      ['hat', '\\hat{#?}'],
+      ['widehat', '\\widehat{#?}'],
+      ['widecheck', '\\widecheck{#?}'],
+      ['mathring', '\\mathring{#?}'],
+      ['vec', '\\vec{#?}'],
+      ['overline', '\\overline{#?}'],
+      ['underline', '\\underline{#?}'],
+      ['underbar', '\\underbar{#?}'],
+      ['overbrace', '\\overbrace{#?}^{#?}'],
+      ['underbrace', '\\underbrace{#?}_{#?}'],
+      ['overbracket', '\\overbracket{#?}^{#?}'],
+      ['underbracket', '\\underbracket{#?}_{#?}'],
+      ['overgroup', '\\overgroup{#?}'],
+      ['undergroup', '\\undergroup{#?}'],
+      ['overleftarrow', '\\overleftarrow{#?}'],
+      ['overrightarrow', '\\overrightarrow{#?}'],
+      ['Overrightarrow', '\\Overrightarrow{#?}'],
+      ['underleftarrow', '\\underleftarrow{#?}'],
+      ['underrightarrow', '\\underrightarrow{#?}'],
+      ['overleftrightarrow', '\\overleftrightarrow{#?}'],
+      ['underleftrightarrow', '\\underleftrightarrow{#?}'],
+      ['overleftharpoon', '\\overleftharpoon{#?}'],
+      ['overrightharpoon', '\\overrightharpoon{#?}'],
+      ['overlinesegment', '\\overlinesegment{#?}'],
+      ['underlinesegment', '\\underlinesegment{#?}'],
+      ["\\'", "\\'{#?}", "Text acute accent (\\')"],
+      ['\\`', '\\`{#?}', 'Text grave accent (\\`)'],
+      ['\\^', '\\^{#?}', 'Text circumflex accent (\\^)'],
+      ['\\~', '\\~{#?}', 'Text tilde accent (\\~)'],
+      ['\\=', '\\={#?}', 'Text macron accent (\\=)'],
+      ['\\u', '\\u{#?}', 'Text breve accent (\\u)'],
+      ['\\.', '\\.{#?}', 'Text dot accent (\\.)'],
+      ['\\"', '\\"{#?}', 'Text umlaut accent (\\")'],
+      ['\\r', '\\r{#?}', 'Text ring accent (\\r)'],
+      ['\\H', '\\H{#?}', 'Text double acute accent (\\H)'],
+      ['\\v', '\\v{#?}', 'Text caron accent (\\v)'],
+    ]),
+  },
+  {
+    label: 'Delimiters',
+    items: [
+      ...commandItems([
+        '\\lparen', '\\rparen', '\\lbrack', '\\rbrack', '\\lbrace', '\\rbrace', '\\langle', '\\rangle',
+        '\\lang', '\\rang', '\\lt', '\\gt', '\\vert', '\\Vert', '\\lvert', '\\rvert', '\\lVert', '\\rVert',
+        '\\lceil', '\\rceil', '\\lfloor', '\\rfloor', '\\lmoustache', '\\rmoustache', '\\lgroup', '\\rgroup',
+        '\\ulcorner', '\\urcorner', '\\llcorner', '\\lrcorner', '\\llbracket', '\\rrbracket', '\\lBrace',
+        '\\rBrace', '\\backslash', '\\uparrow', '\\downarrow', '\\updownarrow', '\\Uparrow', '\\Downarrow',
+        '\\Updownarrow', '\\left', '\\middle', '\\right', '\\big', '\\Big', '\\bigg', '\\Bigg', '\\bigl',
+        '\\Bigl', '\\biggl', '\\Biggl', '\\bigm', '\\Bigm', '\\biggm', '\\Biggm', '\\bigr', '\\Bigr',
+        '\\biggr', '\\Biggr',
+      ]),
+    ],
+  },
+  {
+    label: 'Big Operators',
+    items: commandItems([
+      '\\sum', '\\prod', '\\coprod', '\\int', '\\intop', '\\smallint', '\\iint', '\\iiint', '\\oint',
+      '\\oiint', '\\oiiint', '\\bigotimes', '\\bigoplus', '\\bigodot', '\\biguplus', '\\bigsqcup',
+      '\\bigvee', '\\bigwedge', '\\bigcap', '\\bigcup',
+    ]),
+  },
+  {
+    label: 'More Operators',
+    items: [
+      ...commandItems([
+        '*', '/', '\\pm', '\\plusmn', '\\mp', '\\cdotp', '\\centerdot', '\\circ', '\\circledast',
+        '\\circledcirc', '\\circleddash', '\\Cup', '\\Cap', '\\doublecap', '\\doublecup', '\\curlyvee',
+        '\\curlywedge', '\\divideontimes', '\\dotplus', '\\doublebarwedge', '\\gtrdot', '\\intercal',
+        '\\leftthreetimes', '\\rightthreetimes', '\\ldotp', '\\rtimes', '\\ltimes', '\\setminus',
+        '\\smallsetminus', '\\lessdot', '\\lhd', '\\rhd', '\\unlhd', '\\unrhd', '\\amalg', '\\And',
+        '\\ast', '\\barwedge', '\\bigcirc', '\\boxdot', '\\boxminus', '\\boxplus', '\\boxtimes',
+        '\\bullet', '\\bmod', '\\mod', '\\pmod', '\\pod', '\\land', '\\lor', '\\odot', '\\ominus',
+        '\\oplus', '\\oslash', '\\otimes', '\\sqcap', '\\sqcup', '\\uplus', '\\veebar', '\\wr',
+      ]),
+    ],
+  },
+  {
+    label: 'Fractions',
+    items: [
+      ...templateItems([
+        ['tfrac', '\\tfrac{#?}{#?}'],
+        ['dfrac', '\\dfrac{#?}{#?}'],
+        ['cfrac', '\\cfrac{#?}{#?}'],
+        ['binom', '\\binom{#?}{#?}'],
+        ['dbinom', '\\dbinom{#?}{#?}'],
+        ['tbinom', '\\tbinom{#?}{#?}'],
+        ['genfrac', '\\genfrac{#?}{#?}{#?}{#?}{#?}{#?}'],
+        ['over', '{#? \\over #?}'],
+        ['above', '{#? \\above{#?} #?}'],
+        ['choose', '{#? \\choose #?}'],
+        ['brace', '{#? \\brace #?}'],
+        ['brack', '{#? \\brack #?}'],
+      ]),
+    ],
+  },
+  {
+    label: 'More Relations',
+    items: commandItems([
+      '<', '>', ':', '\\leq', '\\geq', '\\neq', '\\lt', '\\gt', '\\doteqdot', '\\eqcirc', '\\eqcolon',
+      '\\minuscolon', '\\Eqcolon', '\\minuscoloncolon', '\\eqqcolon', '\\equalscolon', '\\Eqqcolon',
+      '\\equalscoloncolon', '\\approxcolon', '\\approxcoloncolon', '\\approxeq', '\\asymp', '\\backepsilon',
+      '\\backsim', '\\backsimeq', '\\between', '\\bowtie', '\\bumpeq', '\\Bumpeq', '\\circeq',
+      '\\colonapprox', '\\Colonapprox', '\\coloncolonapprox', '\\coloneq', '\\colonminus', '\\Coloneq',
+      '\\coloncolonminus', '\\coloneqq', '\\colonequals', '\\Coloneqq', '\\coloncolonequals',
+      '\\colonsim', '\\Colonsim', '\\coloncolonsim', '\\cong', '\\curlyeqprec', '\\curlyeqsucc',
+      '\\dashv', '\\dblcolon', '\\coloncolon', '\\doteq', '\\Doteq', '\\eqsim', '\\eqslantgtr',
+      '\\eqslantless', '\\equiv', '\\fallingdotseq', '\\frown', '\\geqq', '\\geqslant', '\\gg',
+      '\\ggg', '\\gggtr', '\\gtrapprox', '\\gtreqless', '\\gtreqqless', '\\gtrless', '\\gtrsim',
+      '\\imageof', '\\Join', '\\leqq', '\\leqslant', '\\lessapprox', '\\lesseqgtr', '\\lesseqqgtr',
+      '\\lessgtr', '\\lesssim', '\\ll', '\\lll', '\\llless', '\\models', '\\multimap', '\\origof',
+      '\\owns', '\\parallel', '\\perp', '\\pitchfork', '\\prec', '\\precapprox', '\\preccurlyeq',
+      '\\preceq', '\\precsim', '\\risingdotseq', '\\shortmid', '\\shortparallel', '\\sim', '\\simeq',
+      '\\smallfrown', '\\smallsmile', '\\smile', '\\sqsubset', '\\sqsubseteq', '\\sqsupset',
+      '\\sqsupseteq', '\\sub', '\\sube', '\\Subset', '\\subseteqq', '\\succ', '\\succapprox',
+      '\\succcurlyeq', '\\succeq', '\\succsim', '\\supe', '\\Supset', '\\supseteqq', '\\thickapprox',
+      '\\thicksim', '\\trianglelefteq', '\\triangleq', '\\trianglerighteq', '\\varpropto',
+      '\\vartriangle', '\\vartriangleleft', '\\vartriangleright', '\\vcentcolon', '\\ratio',
+      '\\vdash', '\\vDash', '\\Vdash', '\\Vvdash',
+    ]),
+  },
+  {
+    label: 'Negated Relations',
+    items: commandItems([
+      '\\not', '\\gnapprox', '\\gneq', '\\gneqq', '\\gnsim', '\\gvertneqq', '\\lnapprox', '\\lneq',
+      '\\lneqq', '\\lnsim', '\\lvertneqq', '\\ncong', '\\ne', '\\neq', '\\ngeq', '\\ngeqq',
+      '\\ngeqslant', '\\ngtr', '\\nleq', '\\nleqq', '\\nleqslant', '\\nless', '\\nmid',
+      '\\notin', '\\notni', '\\nparallel', '\\nprec', '\\npreceq', '\\nshortmid',
+      '\\nshortparallel', '\\nsim', '\\nsubseteq', '\\nsubseteqq', '\\nsucc', '\\nsucceq',
+      '\\nsupseteq', '\\nsupseteqq', '\\ntriangleleft', '\\ntrianglelefteq', '\\ntriangleright',
+      '\\ntrianglerighteq', '\\nvdash', '\\nvDash', '\\nVDash', '\\nVdash', '\\precnapprox',
+      '\\precneqq', '\\precnsim', '\\subsetneq', '\\subsetneqq', '\\succnapprox', '\\succneqq',
+      '\\succnsim', '\\supsetneq', '\\supsetneqq', '\\varsubsetneq', '\\varsubsetneqq',
+      '\\varsupsetneq', '\\varsupsetneqq',
+    ]),
+  },
+  {
+    label: 'More Arrows',
+    items: commandItems([
+      '\\circlearrowleft', '\\circlearrowright', '\\curvearrowleft', '\\curvearrowright', '\\Darr',
+      '\\dArr', '\\darr', '\\dashleftarrow', '\\dashrightarrow', '\\downdownarrows',
+      '\\downharpoonleft', '\\downharpoonright', '\\gets', '\\Harr', '\\hArr', '\\harr',
+      '\\hookleftarrow', '\\hookrightarrow', '\\iff', '\\impliedby', '\\implies', '\\Larr',
+      '\\lArr', '\\larr', '\\leadsto', '\\Leftarrow', '\\leftarrowtail', '\\leftharpoondown',
+      '\\leftharpoonup', '\\leftleftarrows', '\\leftrightarrows', '\\leftrightharpoons',
+      '\\leftrightsquigarrow', '\\Lleftarrow', '\\longleftarrow', '\\Longleftarrow',
+      '\\longleftrightarrow', '\\Longleftrightarrow', '\\longmapsto', '\\longrightarrow',
+      '\\Longrightarrow', '\\looparrowleft', '\\looparrowright', '\\Lrarr', '\\lrArr',
+      '\\lrarr', '\\Lsh', '\\mapsto', '\\nearrow', '\\nleftarrow', '\\nLeftarrow',
+      '\\nleftrightarrow', '\\nLeftrightarrow', '\\nrightarrow', '\\nRightarrow', '\\nwarrow',
+      '\\rArr', '\\rarr', '\\restriction', '\\rightarrowtail', '\\rightharpoondown',
+      '\\rightharpoonup', '\\rightleftarrows', '\\rightleftharpoons', '\\rightrightarrows',
+      '\\rightsquigarrow', '\\Rrightarrow', '\\Rsh', '\\searrow', '\\swarrow', '\\to',
+      '\\twoheadleftarrow', '\\twoheadrightarrow', '\\Uarr', '\\uArr', '\\uarr', '\\upharpoonleft',
+      '\\upharpoonright', '\\upuparrows',
+    ]),
+  },
+  {
+    label: 'Extensible Arrows',
+    items: templateItems([
+      ['xleftarrow', '\\xleftarrow{#?}'],
+      ['xrightarrow', '\\xrightarrow[#?]{#?}'],
+      ['xLeftarrow', '\\xLeftarrow{#?}'],
+      ['xRightarrow', '\\xRightarrow{#?}'],
+      ['xleftrightarrow', '\\xleftrightarrow{#?}'],
+      ['xLeftrightarrow', '\\xLeftrightarrow{#?}'],
+      ['xhookleftarrow', '\\xhookleftarrow{#?}'],
+      ['xhookrightarrow', '\\xhookrightarrow{#?}'],
+      ['xtwoheadleftarrow', '\\xtwoheadleftarrow{#?}'],
+      ['xtwoheadrightarrow', '\\xtwoheadrightarrow{#?}'],
+      ['xleftharpoonup', '\\xleftharpoonup{#?}'],
+      ['xrightharpoonup', '\\xrightharpoonup{#?}'],
+      ['xleftharpoondown', '\\xleftharpoondown{#?}'],
+      ['xrightharpoondown', '\\xrightharpoondown{#?}'],
+      ['xleftrightharpoons', '\\xleftrightharpoons{#?}'],
+      ['xrightleftharpoons', '\\xrightleftharpoons{#?}'],
+      ['xtofrom', '\\xtofrom{#?}'],
+      ['xmapsto', '\\xmapsto{#?}'],
+      ['xlongequal', '\\xlongequal{#?}'],
+    ]),
+  },
+  {
+    label: 'Notation',
+    items: [
+      ...templateItems([
+        ['bra', '\\bra{#?}'],
+        ['ket', '\\ket{#?}'],
+        ['braket', '\\braket{#?}'],
+        ['Bra', '\\Bra{#?}'],
+        ['Ket', '\\Ket{#?}'],
+        ['Braket', '\\Braket{#?}'],
+        ['Set', '\\Set{#?}'],
+        ['set', '\\set{#?}'],
+      ]),
+      ...commandItems([
+        '\\complement', '\\therefore', '\\because', '\\empty', '\\varnothing', '\\exist',
+        '\\nexists', '\\mid', '\\isin', '\\ni', '\\lnot',
+      ]),
+    ],
+  },
+  {
+    label: 'Layout',
+    items: [
+      ...templateItems([
+        ['cancel', '\\cancel{#?}'],
+        ['bcancel', '\\bcancel{#?}'],
+        ['xcancel', '\\xcancel{#?}'],
+        ['sout', '\\sout{#?}'],
+        ['boxed', '\\boxed{#?}'],
+        ['phase', '\\phase{#?}'],
+        ['tag', '\\tag{#?}'],
+        ['tag*', '\\tag*{#?}'],
+        ['stackrel', '\\stackrel{#?}{#?}'],
+        ['raisebox', '\\raisebox{#?}{#?}'],
+        ['vcenter', '\\vcenter{#?}'],
+        ['hbox', '\\hbox{#?}'],
+        ['substack', '\\substack{#?}'],
+        ['mathllap', '\\mathllap{#?}'],
+        ['mathrlap', '\\mathrlap{#?}'],
+        ['mathclap', '\\mathclap{#?}'],
+        ['smash', '\\smash{#?}'],
+        ['smash[b]', '\\smash[b]{#?}'],
+        ['llap', '\\llap{#?}'],
+        ['rlap', '\\rlap{#?}'],
+        ['clap', '\\clap{#?}'],
+        ['phantom', '\\phantom{#?}'],
+        ['hphantom', '\\hphantom{#?}'],
+        ['vphantom', '\\vphantom{#?}'],
+        ['kern', '\\kern{#?}'],
+        ['mkern', '\\mkern{#?}'],
+        ['mskip', '\\mskip{#?}'],
+        ['hskip', '\\hskip{#?}'],
+        ['hspace', '\\hspace{#?}'],
+        ['hspace*', '\\hspace*{#?}'],
+      ]),
+      ...commandItems([
+        '\\\\', '\\newline', '\\allowbreak', '\\nobreak', '\\,', '\\thinspace', '\\>', '\\:',
+        '\\medspace', '\\;', '\\thickspace', '\\enspace', '\\quad', '\\qquad', '\\!', '\\negthinspace',
+        '\\negmedspace', '\\negthickspace', '\\nobreakspace', '\\space', '\\mathstrut', '~',
+      ]),
+    ],
+  },
+  {
+    label: 'Fonts & Style',
+    items: [
+      ...templateItems([
+        ['mathrm', '\\mathrm{#?}'],
+        ['mathbf', '\\mathbf{#?}'],
+        ['mathsf', '\\mathsf{#?}'],
+        ['mathnormal', '\\mathnormal{#?}'],
+        ['textbf', '\\textbf{#?}'],
+        ['textsf', '\\textsf{#?}'],
+        ['textrm', '\\textrm{#?}'],
+        ['bold', '\\bold{#?}'],
+        ['mathsfit', '\\mathsfit{#?}'],
+        ['textnormal', '\\textnormal{#?}'],
+        ['boldsymbol', '\\boldsymbol{#?}'],
+        ['Bbb', '\\Bbb{#?}'],
+        ['text', '\\text{#?}'],
+        ['bm', '\\bm{#?}'],
+        ['mathbb', '\\mathbb{#?}'],
+        ['textup', '\\textup{#?}'],
+        ['textmd', '\\textmd{#?}'],
+        ['frak', '\\frak{#?}'],
+        ['mathit', '\\mathit{#?}'],
+        ['mathtt', '\\mathtt{#?}'],
+        ['mathfrak', '\\mathfrak{#?}'],
+        ['textit', '\\textit{#?}'],
+        ['texttt', '\\texttt{#?}'],
+        ['mathcal', '\\mathcal{#?}'],
+        ['emph', '\\emph{#?}'],
+        ['mathscr', '\\mathscr{#?}'],
+        ['pmb', '\\pmb{#?}'],
+        ['mathbin', '\\mathbin{#?}'],
+        ['mathclose', '\\mathclose{#?}'],
+        ['mathinner', '\\mathinner{#?}'],
+        ['mathop', '\\mathop{#?}'],
+        ['mathopen', '\\mathopen{#?}'],
+        ['mathord', '\\mathord{#?}'],
+        ['mathpunct', '\\mathpunct{#?}'],
+        ['mathrel', '\\mathrel{#?}'],
+        ['textcolor', '\\textcolor{#?}{#?}'],
+        ['colorbox', '\\colorbox{#?}{#?}'],
+        ['fcolorbox', '\\fcolorbox{#?}{#?}{#?}'],
+        ['color', '\\color{#?}'],
+        ['verb', '\\verb|#?|'],
+      ]),
+      ...commandItems([
+        '\\bf', '\\sf', '\\rm', '\\it', '\\tt', '\\cal', '\\Huge', '\\huge', '\\LARGE', '\\Large',
+        '\\large', '\\normalsize', '\\small', '\\footnotesize', '\\scriptsize', '\\tiny',
+        '\\displaystyle', '\\textstyle', '\\scriptstyle', '\\scriptscriptstyle', '\\limits', '\\nolimits',
+      ]),
+    ],
+  },
+  {
+    label: 'Symbols',
+    items: commandItems([
+      '\\dots', '\\cdots', '\\ddots', '\\ldots', '\\vdots', '\\dotsb', '\\dotsc', '\\dotsi',
+      '\\dotsm', '\\dotso', '\\mathellipsis', '\\KaTeX', '\\LaTeX', '\\TeX', '\\%', '\\#', '\\&',
+      '\\_', '\\$', '\\infin', '\\checkmark', '\\dag', '\\dagger', '\\ddag', '\\ddagger', '\\Dagger',
+      '\\Box', '\\square', '\\angle', '\\measuredangle', '\\sphericalangle', '\\top', '\\bot',
+      '\\colon', '\\backprime', '\\prime', '\\lq', '\\rq', '\\bigtriangledown', '\\bigtriangleup',
+      '\\blacktriangle', '\\blacktriangledown', '\\blacktriangleleft', '\\blacktriangleright',
+      '\\triangle', '\\triangledown', '\\triangleleft', '\\triangleright', '\\diamond', '\\Diamond',
+      '\\lozenge', '\\blacklozenge', '\\star', '\\bigstar', '\\clubsuit', '\\clubs', '\\diamondsuit',
+      '\\diamonds', '\\heartsuit', '\\hearts', '\\spadesuit', '\\spades', '\\maltese', '\\flat',
+      '\\natural', '\\sharp', '\\surd', '\\degree', '\\mho', '\\diagdown', '\\diagup', '\\P', '\\S',
+      '\\sect', '\\copyright', '\\circledR', '\\circledS', '\\pounds', '\\mathsterling', '\\yen',
+      '\\minuso',
+    ]),
+  },
+  {
+    label: 'HTML',
+    items: templateItems([
+      ['href', '\\href{#?}{#?}'],
+      ['url', '\\url{#?}'],
+      ['includegraphics', '\\includegraphics[height=#?]{#?}'],
+      ['htmlId', '\\htmlId{#?}{#?}'],
+      ['htmlClass', '\\htmlClass{#?}{#?}'],
+      ['htmlStyle', '\\htmlStyle{#?}{#?}'],
+      ['htmlData', '\\htmlData{#?}{#?}'],
+    ]),
+  },
+  {
+    label: 'Macros',
+    items: templateItems([
+      ['def', '\\def\\foo{#?}'],
+      ['gdef', '\\gdef\\foo#1{#?}'],
+      ['edef', '\\edef\\foo{#?}'],
+      ['xdef', '\\xdef\\foo{#?}'],
+      ['let', '\\let\\foo=\\bar'],
+      ['futurelet', '\\futurelet\\foo\\bar #?'],
+      ['global def', '\\global\\def\\foo{#?}'],
+      ['newcommand', '\\newcommand\\foo[1]{#?}'],
+      ['renewcommand', '\\renewcommand\\foo[1]{#?}'],
+      ['providecommand', '\\providecommand\\foo[1]{#?}'],
+      ['char', '\\char"#?'],
+      ['mathchoice', '\\mathchoice{#?}{#?}{#?}{#?}'],
+      ['TextOrMath', '\\TextOrMath{#?}{#?}'],
+      ['@ifstar', '\\@ifstar{#?}{#?}'],
+      ['@ifnextchar', '\\@ifnextchar#?{#?}{#?}'],
+      ['@firstoftwo', '\\@firstoftwo{#?}{#?}'],
+      ['@secondoftwo', '\\@secondoftwo{#?}{#?}'],
+      ['relax', '\\relax'],
+      ['expandafter', '\\expandafter#?'],
+      ['noexpand', '\\noexpand#?'],
+    ]),
   },
 ]
 
-const DROPDOWN_GROUP_LABELS = ['Greek', 'Relations', 'Arithmetic', 'Sets & Logic', 'Arrows', 'Functions']
+const DROPDOWN_GROUP_LABELS = [
+  'Greek',
+  'Environments',
+  'Accents',
+  'Delimiters',
+  'Big Operators',
+  'More Operators',
+  'Fractions',
+  'Relations',
+  'More Relations',
+  'Negated Relations',
+  'Sets & Logic',
+  'Arrows',
+  'More Arrows',
+  'Extensible Arrows',
+  'Notation',
+  'Layout',
+  'Fonts & Style',
+  'Symbols',
+  'HTML',
+  'Macros',
+  'Functions',
+]
 const DROPDOWN_GROUP_LABEL_SET = new Set(DROPDOWN_GROUP_LABELS)
+const GREEK_ALIAS_SYMBOL_VALUES = new Set(GREEK_ALIAS_VALUES)
 const HEBREW_SYMBOL_VALUES = new Set(['\\aleph', '\\beth', '\\gimel', '\\daleth'])
 const OTHER_LETTER_SYMBOL_VALUES = new Set([
   '\\imath',
@@ -406,6 +860,7 @@ const FUNCTION_SECTION_VALUES: Array<{ label: string; values: string[] }> = [
     values: [
       '\\operatorname{f}',
       '\\operatorname*{f}',
+      '\\operatornamewithlimits{f}',
     ],
   },
 ]
@@ -417,7 +872,7 @@ function SymbolDropdown({
 }: {
   disabled: boolean
   group: SymbolGroup
-  onInsertSnippet: (snippet: string, mode: 'cmd' | 'write' | 'func-slot') => void
+  onInsertSnippet: (snippet: string, mode: 'cmd' | 'write' | 'template' | 'func-slot') => void
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement | null>(null)
@@ -428,12 +883,17 @@ function SymbolDropdown({
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
   const [floatingTooltip, setFloatingTooltip] = useState<{ title: string; top: number; left: number; placement: 'above' | 'below' } | null>(null)
   const isFunctionsGroup = group.label === 'Functions'
+  const isWideDropdown = isFunctionsGroup || group.items.some((item) => item.display.length > 4)
   const menuSections = group.label === 'Greek'
     ? [
       {
         label: 'Greek',
-        items: group.items.filter((item) => !HEBREW_SYMBOL_VALUES.has(item.value) && !OTHER_LETTER_SYMBOL_VALUES.has(item.value)),
+        items: group.items.filter((item) =>
+          !GREEK_ALIAS_SYMBOL_VALUES.has(item.value)
+          && !HEBREW_SYMBOL_VALUES.has(item.value)
+          && !OTHER_LETTER_SYMBOL_VALUES.has(item.value)),
       },
+      { label: 'Greek aliases', items: group.items.filter((item) => GREEK_ALIAS_SYMBOL_VALUES.has(item.value)) },
       { label: 'Hebrew', items: group.items.filter((item) => HEBREW_SYMBOL_VALUES.has(item.value)) },
       { label: 'Other letters', items: group.items.filter((item) => OTHER_LETTER_SYMBOL_VALUES.has(item.value)) },
     ]
@@ -466,12 +926,12 @@ function SymbolDropdown({
     if (!button) return
 
     const rect = button.getBoundingClientRect()
-    const menuWidth = Math.min(isFunctionsGroup ? 480 : 288, window.innerWidth - 32)
+    const menuWidth = Math.min(isWideDropdown ? 480 : 288, window.innerWidth - 32)
     setMenuPosition({
       top: rect.bottom + 6,
       left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)),
     })
-  }, [isFunctionsGroup])
+  }, [isWideDropdown])
 
   const showFloatingTooltip = useCallback((title: string, element: HTMLElement) => {
     const rect = element.getBoundingClientRect()
@@ -536,7 +996,7 @@ function SymbolDropdown({
       </button>
       {isOpen ? (
         <div
-          className={`symbol-dropdown-menu${isFunctionsGroup ? ' symbol-dropdown-menu-functions' : ''}`}
+          className={`symbol-dropdown-menu${isWideDropdown ? ' symbol-dropdown-menu-functions' : ''}`}
           role="menu"
           style={menuPosition}
         >
@@ -544,11 +1004,11 @@ function SymbolDropdown({
             {menuSections.map((section) => (
               <div key={section.label ?? group.label} className="symbol-dropdown-section">
                 {section.label ? <span className="symbol-dropdown-section-title">{section.label}</span> : null}
-                <div className={`symbol-dropdown-section-grid${isFunctionsGroup ? ' symbol-dropdown-section-grid-functions' : ''}`}>
+                <div className={`symbol-dropdown-section-grid${isWideDropdown ? ' symbol-dropdown-section-grid-functions' : ''}`}>
                   {section.items.map((item) => (
                     <div
                       key={`${section.label ?? group.label}-${item.value}`}
-                      className={`cell-button-tooltip-wrap symbol-dropdown-item-wrap${isFunctionsGroup ? ' symbol-dropdown-item-wrap-functions' : ''}`}
+                      className={`cell-button-tooltip-wrap symbol-dropdown-item-wrap${isWideDropdown ? ' symbol-dropdown-item-wrap-functions' : ''}`}
                       onMouseEnter={(event) => showFloatingTooltip(item.title, event.currentTarget)}
                       onMouseLeave={() => setFloatingTooltip(null)}
                       onFocusCapture={(event) => showFloatingTooltip(item.title, event.currentTarget)}
@@ -651,7 +1111,7 @@ function SymbolDropdown({
                         <>
                           <button
                             type="button"
-                            className="symbol-btn symbol-dropdown-item"
+                            className={`symbol-btn symbol-dropdown-item${isWideDropdown ? ' symbol-dropdown-item-functions' : ''}`}
                             role="menuitem"
                             title={item.title}
                             aria-label={item.title}

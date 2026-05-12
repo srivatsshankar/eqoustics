@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { NotebookCell } from '../../shared/types/notebook'
+import { KATEX_COMMAND_PREVIEWS, KATEX_TEMPLATE_PREVIEWS } from '../../shared/katexPreviews'
 
 type InsertMode = 'cmd' | 'write' | 'latex' | 'template' | 'func-slot'
 export type TextFormatCommand = 'bold' | 'italic' | 'underline' | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'bulletList' | 'numberedList'
@@ -231,7 +232,86 @@ const COMMAND_DISPLAY: Record<string, string> = {
   '\\backslash': '\\',
 }
 
-const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix'])
+const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix', 'Vmatrix'])
+const GENERIC_ENVIRONMENTS = new Set([
+  'array',
+  'cases',
+  'rcases',
+  'smallmatrix',
+  'subarray',
+  'equation',
+  'equation*',
+  'split',
+  'align',
+  'align*',
+  'aligned',
+  'alignat',
+  'alignat*',
+  'alignedat',
+  'gather',
+  'gather*',
+  'gathered',
+  'CD',
+  'darray',
+  'dcases',
+  'drcases',
+  'matrix*',
+  'pmatrix*',
+  'bmatrix*',
+  'Bmatrix*',
+  'vmatrix*',
+  'Vmatrix*',
+])
+type GenericArgKind = 'required' | 'optional'
+const GENERIC_ENVIRONMENT_ARG_SPECS: Record<string, GenericArgKind[]> = {
+  array: ['required'],
+  subarray: ['required'],
+  alignat: ['required'],
+  'alignat*': ['required'],
+  alignedat: ['required'],
+  darray: ['required'],
+  'matrix*': ['optional'],
+  'pmatrix*': ['optional'],
+  'bmatrix*': ['optional'],
+  'Bmatrix*': ['optional'],
+  'vmatrix*': ['optional'],
+  'Vmatrix*': ['optional'],
+}
+const oneRequiredArgCommands = [
+  '\\tilde', '\\widetilde', '\\utilde', '\\acute', '\\bar', '\\breve', '\\check', '\\dot', '\\ddot',
+  '\\dddot', '\\ddddot', '\\grave', '\\hat', '\\widehat', '\\widecheck', '\\mathring', '\\vec',
+  '\\overline', '\\underline', '\\underbar', '\\overgroup', '\\undergroup', '\\overleftarrow',
+  '\\overrightarrow', '\\Overrightarrow', '\\underleftarrow', '\\underrightarrow', '\\overleftrightarrow',
+  '\\underleftrightarrow', '\\overleftharpoon', '\\overrightharpoon', '\\overlinesegment',
+  '\\underlinesegment', "\\'", '\\`', '\\^', '\\~', '\\=', '\\u', '\\.', '\\"', '\\r', '\\H', '\\v',
+  '\\cancel', '\\bcancel', '\\xcancel', '\\sout', '\\boxed', '\\phase', '\\tag', '\\tag*', '\\vcenter',
+  '\\hbox', '\\substack', '\\mathllap', '\\mathrlap', '\\mathclap', '\\llap', '\\rlap', '\\clap',
+  '\\phantom', '\\hphantom', '\\vphantom', '\\kern', '\\mkern', '\\mskip', '\\hskip', '\\hspace',
+  '\\hspace*', '\\bra', '\\ket', '\\braket', '\\Bra', '\\Ket', '\\Braket', '\\Set', '\\set',
+  '\\mathrm', '\\mathbf', '\\mathsf', '\\mathnormal', '\\textbf', '\\textsf', '\\textrm', '\\bold',
+  '\\mathsfit', '\\textnormal', '\\boldsymbol', '\\Bbb', '\\bm', '\\mathbb', '\\textup', '\\textmd',
+  '\\frak', '\\mathtt', '\\mathfrak', '\\texttt', '\\mathcal', '\\emph', '\\mathscr', '\\pmb',
+  '\\mathbin', '\\mathclose', '\\mathinner', '\\mathop', '\\mathopen', '\\mathord', '\\mathpunct',
+  '\\mathrel', '\\color', '\\url',
+  '\\xleftarrow', '\\xLeftarrow', '\\xRightarrow', '\\xleftrightarrow', '\\xLeftrightarrow',
+  '\\xhookleftarrow', '\\xhookrightarrow', '\\xtwoheadleftarrow', '\\xtwoheadrightarrow',
+  '\\xleftharpoonup', '\\xrightharpoonup', '\\xleftharpoondown', '\\xrightharpoondown',
+  '\\xleftrightharpoons', '\\xrightleftharpoons', '\\xtofrom', '\\xmapsto', '\\xlongequal',
+]
+const twoRequiredArgCommands = [
+  '\\tfrac', '\\dfrac', '\\cfrac', '\\binom', '\\dbinom', '\\tbinom', '\\stackrel', '\\raisebox',
+  '\\textcolor', '\\colorbox', '\\href', '\\htmlId', '\\htmlClass', '\\htmlStyle', '\\htmlData',
+]
+const GENERIC_COMMAND_ARG_SPECS: Record<string, GenericArgKind[]> = {
+  ...Object.fromEntries(oneRequiredArgCommands.map((command) => [command, ['required'] as GenericArgKind[]])),
+  ...Object.fromEntries(twoRequiredArgCommands.map((command) => [command, ['required', 'required'] as GenericArgKind[]])),
+  '\\genfrac': ['required', 'required', 'required', 'required', 'required', 'required'],
+  '\\fcolorbox': ['required', 'required', 'required'],
+  '\\includegraphics': ['optional', 'required'],
+  '\\smash': ['optional', 'required'],
+  '\\xrightarrow': ['optional', 'required'],
+  '\\verb': ['required'],
+}
 const SIZED_LEFT_DELIMITER_COMMANDS: Record<string, string> = {
   '\\bigl': '\\bigr',
   '\\Bigl': '\\Bigr',
@@ -346,11 +426,11 @@ function escapeMathText(value: string): string {
 
 function commandHtml(command: string): string {
   const fallback = command.startsWith('\\') ? command.slice(1) : command
-  const display = COMMAND_DISPLAY[command] ?? escapeHtml(fallback)
+  const display = COMMAND_DISPLAY[command] ?? escapeHtml(KATEX_COMMAND_PREVIEWS[command] ?? fallback)
   return `<span class="math-symbol" data-latex="${escapeAttr(command)}" contenteditable="false">${display}</span>`
 }
 
-function operatorNameHtml(command: '\\operatorname' | '\\operatorname*', body: string): string {
+function operatorNameHtml(command: '\\operatorname' | '\\operatorname*' | '\\operatornamewithlimits', body: string): string {
   const latex = `${command}{${body}}`
   return `<span class="math-symbol" data-latex="${escapeAttr(latex)}" contenteditable="false">${escapeHtml(body)}</span>`
 }
@@ -498,6 +578,73 @@ function delimiterHtml(left: string, right: string, body = '', focusBody = false
   return `<span class="math-delimiter" data-math="delimiter" data-left="${escapeAttr(left)}" data-right="${escapeAttr(right)}" data-left-command="${escapeAttr(leftCommand)}" data-right-command="${escapeAttr(rightCommand)}" data-delimiter-size="${escapeAttr(delimiterSizeName(leftCommand))}"><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(delimiterDisplay(left))}</span>${slotHtml('body', body, focusBody)}<span class="math-delimiter-mark" contenteditable="false">${escapeHtml(delimiterDisplay(right))}</span></span>`
 }
 
+function commandLabel(command: string): string {
+  return command.startsWith('\\') ? command.slice(1) : command
+}
+
+function placeholderTemplateKey(command: string, args: Array<{ kind: GenericArgKind }>): string {
+  return `${command}${args.map((arg) => (arg.kind === 'optional' ? '[#?]' : '{#?}')).join('')}`
+}
+
+function commandPreview(command: string, args: Array<{ kind: GenericArgKind }> = []): string {
+  return KATEX_TEMPLATE_PREVIEWS[placeholderTemplateKey(command, args)]
+    ?? KATEX_COMMAND_PREVIEWS[command]
+    ?? commandLabel(command)
+}
+
+function environmentPreview(env: string, args: Array<{ kind: GenericArgKind }>): string {
+  const argTemplate = args.map((arg) => (arg.kind === 'optional' ? '[#?]' : '{#?}')).join('')
+  return KATEX_TEMPLATE_PREVIEWS[`\\begin{${env}}${argTemplate}#?\\end{${env}}`]
+    ?? KATEX_TEMPLATE_PREVIEWS[`\\begin{${env}}#?\\end{${env}}`]
+    ?? env
+}
+
+function genericCommandHtml(
+  command: string,
+  args: Array<{ kind: GenericArgKind; content?: string }>,
+  focusFirstArg = false,
+): string {
+  const renderedArgs = args.map((arg, index) => {
+    const open = arg.kind === 'optional' ? '[' : '{'
+    const close = arg.kind === 'optional' ? ']' : '}'
+    return [
+      `<span class="math-generic-brace" contenteditable="false">${escapeHtml(open)}</span>`,
+      slotHtml(`arg-${index}`, arg.content ?? '', focusFirstArg && index === 0),
+      `<span class="math-generic-brace" contenteditable="false">${escapeHtml(close)}</span>`,
+    ].join('')
+  }).join('')
+
+  return `<span class="math-generic-command" data-math="generic-command" data-command="${escapeAttr(command)}" data-arg-kinds="${escapeAttr(args.map((arg) => arg.kind).join(','))}"><span class="math-generic-command-label" contenteditable="false">${escapeHtml(commandPreview(command, args))}</span>${renderedArgs}</span>`
+}
+
+function genericEnvironmentHtml(
+  env: string,
+  args: Array<{ kind: GenericArgKind; content?: string }> = [],
+  body = '',
+  focusFirstSlot = false,
+): string {
+  const renderedArgs = args.map((arg, index) => {
+    const open = arg.kind === 'optional' ? '[' : '{'
+    const close = arg.kind === 'optional' ? ']' : '}'
+    return [
+      `<span class="math-generic-brace" contenteditable="false">${escapeHtml(open)}</span>`,
+      slotHtml(`env-arg-${index}`, arg.content ?? '', focusFirstSlot && index === 0),
+      `<span class="math-generic-brace" contenteditable="false">${escapeHtml(close)}</span>`,
+    ].join('')
+  }).join('')
+  const focusBody = focusFirstSlot && args.length === 0
+
+  return `<span class="math-environment" data-math="environment" data-env="${escapeAttr(env)}" data-arg-kinds="${escapeAttr(args.map((arg) => arg.kind).join(','))}"><span class="math-environment-label" contenteditable="false">${escapeHtml(environmentPreview(env, args))}</span>${renderedArgs}${slotHtml('environment-body', body, focusBody)}</span>`
+}
+
+function latexTemplateHtml(snippet: string): string {
+  let slotIndex = 0
+  const template = snippet.replace(/#\?/g, () => `__slot_${slotIndex++}__`)
+  const label = snippet.match(/^\\[a-zA-Z@]+\*?|^\\./)?.[0] ?? 'template'
+  const slots = Array.from({ length: slotIndex }, (_, index) => slotHtml(`template-${index}`, '', index === 0)).join('')
+  return `<span class="math-latex-template" data-math="latex-template" data-template="${escapeAttr(template)}"><span class="math-generic-command-label" contenteditable="false">${escapeHtml(KATEX_TEMPLATE_PREVIEWS[snippet] ?? commandLabel(label))}</span>${slots}</span>`
+}
+
 function matrixHtml(env: string, rows: string[][], focusFirstCell = false): string {
   const delimiters: Record<string, [string, string]> = {
     matrix: ['', ''],
@@ -505,6 +652,7 @@ function matrixHtml(env: string, rows: string[][], focusFirstCell = false): stri
     bmatrix: ['[', ']'],
     vmatrix: ['|', '|'],
     Bmatrix: ['{', '}'],
+    Vmatrix: ['\u2016', '\u2016'],
   }
   const [left, right] = delimiters[env] ?? delimiters.pmatrix
   const body = rows
@@ -570,7 +718,7 @@ function readGroupOrToken(source: string, index: number): { body: string; end: n
   if (group) return group
 
   if (source[index] === '\\') {
-    const match = source.slice(index).match(/^\\[a-zA-Z]+|^\\./)
+    const match = source.slice(index).match(/^\\[a-zA-Z@]+\*?|^\\./)
     if (match) return { body: match[0], end: index + match[0].length }
   }
 
@@ -578,7 +726,7 @@ function readGroupOrToken(source: string, index: number): { body: string; end: n
 }
 
 function readCommand(source: string, index: number): { command: string; end: number } {
-  const match = source.slice(index).match(/^\\[a-zA-Z]+|^\\./)
+  const match = source.slice(index).match(/^\\[a-zA-Z@]+\*?|^\\./)
   if (!match) return { command: source[index] ?? '', end: index + 1 }
   return { command: match[0], end: index + match[0].length }
 }
@@ -606,6 +754,63 @@ function tryRenderMatrix(source: string, index: number): { html: string; end: nu
 
   const rows = splitMatrixRows(source.slice(bodyStart, bodyEnd))
   return { html: matrixHtml(env, rows.length ? rows : [['']]), end: bodyEnd + endToken.length }
+}
+
+function tryRenderGenericEnvironment(source: string, index: number): { html: string; end: number } | null {
+  const begin = source.slice(index).match(/^\\begin\{([^}]+)\}/)
+  if (!begin || !GENERIC_ENVIRONMENTS.has(begin[1])) return null
+
+  const env = begin[1]
+  let bodyStart = index + begin[0].length
+  const args: Array<{ kind: GenericArgKind; content: string }> = []
+  for (const kind of GENERIC_ENVIRONMENT_ARG_SPECS[env] ?? []) {
+    if (kind === 'optional') {
+      const optional = readBracketGroupAfterSpaces(source, bodyStart)
+      if (optional) {
+        args.push({ kind, content: renderSlotLatex(optional.body) })
+        bodyStart = optional.end
+      }
+      continue
+    }
+
+    const group = readGroupAfterSpaces(source, bodyStart)
+    if (!group) return null
+    args.push({ kind, content: renderSlotLatex(group.body) })
+    bodyStart = group.end
+  }
+  const endToken = `\\end{${env}}`
+  const bodyEnd = source.indexOf(endToken, bodyStart)
+  if (bodyEnd < 0) return null
+
+  return {
+    html: genericEnvironmentHtml(env, args, renderLatexToHtml(source.slice(bodyStart, bodyEnd))),
+    end: bodyEnd + endToken.length,
+  }
+}
+
+function tryRenderGenericCommand(source: string, command: string, end: number): { html: string; end: number } | null {
+  const spec = GENERIC_COMMAND_ARG_SPECS[command]
+  if (!spec) return null
+
+  let cursor = end
+  const args: Array<{ kind: GenericArgKind; content: string }> = []
+  for (const kind of spec) {
+    if (kind === 'optional') {
+      const optional = readBracketGroupAfterSpaces(source, cursor)
+      if (optional) {
+        args.push({ kind, content: renderSlotLatex(optional.body) })
+        cursor = optional.end
+      }
+      continue
+    }
+
+    const group = readGroupAfterSpaces(source, cursor)
+    if (!group) return null
+    args.push({ kind, content: renderSlotLatex(group.body) })
+    cursor = group.end
+  }
+
+  return { html: genericCommandHtml(command, args), end: cursor }
 }
 
 function matchingListEnvironmentEnd(source: string, bodyStart: number, env: 'itemize' | 'enumerate'): number {
@@ -725,6 +930,13 @@ function renderLatexToHtml(latex: string): string {
       continue
     }
 
+    const environment = tryRenderGenericEnvironment(source, index)
+    if (environment) {
+      html += environment.html
+      index = environment.end
+      continue
+    }
+
     const sizedDelimiter = renderSizedDelimiter(source, index)
     if (sizedDelimiter) {
       html += sizedDelimiter.html
@@ -781,7 +993,7 @@ function renderLatexToHtml(latex: string): string {
         }
       }
 
-      if (command === '\\operatorname' || command === '\\operatorname*') {
+      if (command === '\\operatorname' || command === '\\operatorname*' || command === '\\operatornamewithlimits') {
         const group = readGroup(source, end)
         if (group) {
           const argument = readGroupAfterSpaces(source, group.end)
@@ -816,6 +1028,13 @@ function renderLatexToHtml(latex: string): string {
         const rawBody = source.slice(end).trim()
         html += formatHtml(HEADING_COMMANDS[command], renderLatexToHtml(rawBody))
         index = source.length
+        continue
+      }
+
+      const genericCommand = tryRenderGenericCommand(source, command, end)
+      if (genericCommand) {
+        html += genericCommand.html
+        index = genericCommand.end
         continue
       }
 
@@ -952,6 +1171,40 @@ function serializeNode(node: Node): string {
   }
 
   const mathKind = node.dataset.math
+  if (mathKind === 'generic-command') {
+    const command = node.dataset.command ?? ''
+    const kinds = (node.dataset.argKinds ?? '')
+      .split(',')
+      .filter((kind): kind is GenericArgKind => kind === 'required' || kind === 'optional')
+    const args = kinds.map((kind, index) => {
+      const value = serializeDirectSlot(node, `arg-${index}`) || ' '
+      return kind === 'optional' ? `[${value}]` : `{${value}}`
+    }).join('')
+    return `${command}${args}`
+  }
+
+  if (mathKind === 'environment') {
+    const env = node.dataset.env || 'array'
+    const kinds = (node.dataset.argKinds ?? '')
+      .split(',')
+      .filter((kind): kind is GenericArgKind => kind === 'required' || kind === 'optional')
+    const args = kinds.map((kind, index) => {
+      const value = serializeDirectSlot(node, `env-arg-${index}`) || ' '
+      return kind === 'optional' ? `[${value}]` : `{${value}}`
+    }).join('')
+    return `\\begin{${env}}${args}${serializeDirectSlot(node, 'environment-body', false)}\\end{${env}}`
+  }
+
+  if (mathKind === 'latex-template') {
+    let template = node.dataset.template ?? ''
+    Array.from(node.querySelectorAll<HTMLElement>('[data-slot^="template-"]')).forEach((slot) => {
+      const role = slot.dataset.slot ?? ''
+      const index = role.replace('template-', '')
+      template = template.replace(`__slot_${index}__`, serializeChildren(slot).trim() || ' ')
+    })
+    return template
+  }
+
   if (mathKind === 'frac') {
     const numerator = serializeDirectSlot(node, 'numerator') || ' '
     const denominator = serializeDirectSlot(node, 'denominator') || ' '
@@ -1086,6 +1339,9 @@ function htmlForSnippet(snippet: string, mode: InsertMode = 'write'): string {
   if (snippet === '\\left\\lbrace\\right\\rbrace') return delimiterHtml('\\lbrace', '\\rbrace', '', true)
 
   const rendered = renderLatexToHtml(getLatexSourceSnippet(snippet, mode))
+  if (mode === 'template' && snippet.includes('#?') && !rendered.includes('math-slot')) {
+    return latexTemplateHtml(snippet)
+  }
   const hasExplicitPlaceholder = snippet.includes('#?') || snippet.includes('{ }')
   return hasExplicitPlaceholder ? focusFirstSlotInHtml(rendered) : `${rendered}<span data-caret-marker="true"></span>`
 }

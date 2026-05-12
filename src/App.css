@@ -159,7 +159,7 @@
   position: relative;
   z-index: 3;
   margin-top: -0.4rem;
-  margin-bottom: -0.4rem;
+  margin-bottom: 0.15rem;
 }
 
 .toolbar-row-contextual {
@@ -914,11 +914,27 @@
 .math-script-group,
 .math-overset,
 .math-underset,
-.math-bothset {
+.math-bothset,
+.math-generic-command,
+.math-environment,
+.math-latex-template {
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
   margin: 0 0.08rem;
+}
+
+.math-generic-command,
+.math-environment,
+.math-latex-template {
+  gap: 0.04rem;
+}
+
+.math-generic-command-label,
+.math-environment-label,
+.math-generic-brace {
+  color: #475569;
+  font-size: 0.78em;
 }
 
 .math-overset,
