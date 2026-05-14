@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { NotebookCell } from '../../shared/types/notebook'
-import { KATEX_COMMAND_PREVIEWS, KATEX_TEMPLATE_PREVIEWS } from '../../shared/katexPreviews'
+import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
 
 type InsertMode = 'cmd' | 'write' | 'latex' | 'template' | 'func-slot'
 export type TextFormatCommand = 'bold' | 'italic' | 'underline' | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'bulletList' | 'numberedList'
@@ -284,7 +284,7 @@ const oneRequiredArgCommands = [
   '\\overrightarrow', '\\Overrightarrow', '\\underleftarrow', '\\underrightarrow', '\\overleftrightarrow',
   '\\underleftrightarrow', '\\overleftharpoon', '\\overrightharpoon', '\\overlinesegment',
   '\\underlinesegment', "\\'", '\\`', '\\^', '\\~', '\\=', '\\u', '\\.', '\\"', '\\r', '\\H', '\\v',
-  '\\cancel', '\\bcancel', '\\xcancel', '\\sout', '\\boxed', '\\phase', '\\tag', '\\tag*', '\\vcenter',
+  '\\cancel', '\\bcancel', '\\xcancel', '\\sout', '\\boxed', '\\phase', '\\angln', '\\tag', '\\tag*', '\\vcenter',
   '\\hbox', '\\substack', '\\mathllap', '\\mathrlap', '\\mathclap', '\\llap', '\\rlap', '\\clap',
   '\\phantom', '\\hphantom', '\\vphantom', '\\kern', '\\mkern', '\\mskip', '\\hskip', '\\hspace',
   '\\hspace*', '\\bra', '\\ket', '\\braket', '\\Bra', '\\Ket', '\\Braket', '\\Set', '\\set',
@@ -424,9 +424,32 @@ function escapeMathText(value: string): string {
   return value.replace(/[{}]/g, (match) => `\\${match}`)
 }
 
+const SPACE_WIDTHS: Record<string, string> = {
+  '\\,': '0.166em', '\\thinspace': '0.166em',
+  '\\:': '0.222em', '\\medspace': '0.222em',
+  '\\;': '0.277em', '\\thickspace': '0.277em',
+  '\\quad': '1em', '\\qquad': '2em',
+  '\\enspace': '0.5em',
+  '\\!': '-0.166em', '\\negthinspace': '-0.166em',
+  '~': '0.333em',
+}
+
 function commandHtml(command: string): string {
+  if (command === '\\\\' || command === '\\newline') {
+    return `<span class="math-newline" data-latex="${escapeAttr(command)}" data-layout-label="${escapeAttr(command)}" contenteditable="false"></span>`
+  }
+
+  if (SPACE_WIDTHS[command]) {
+    const width = SPACE_WIDTHS[command]
+    const label = escapeAttr(command)
+    if (width.startsWith('-')) {
+      return `<span class="math-space math-space-negative" data-latex="${escapeAttr(command)}" data-layout-label="${label}" contenteditable="false" style="--math-space-width: ${width.slice(1)}; margin-right: ${width};"></span>`
+    }
+    return `<span class="math-space" data-latex="${escapeAttr(command)}" data-layout-label="${label}" contenteditable="false" style="--math-space-width: ${width};"></span>`
+  }
+
   const fallback = command.startsWith('\\') ? command.slice(1) : command
-  const display = COMMAND_DISPLAY[command] ?? escapeHtml(KATEX_COMMAND_PREVIEWS[command] ?? fallback)
+  const display = COMMAND_DISPLAY[command] ?? escapeHtml(LATEX_COMMAND_PREVIEWS[command] ?? fallback)
   return `<span class="math-symbol" data-latex="${escapeAttr(command)}" contenteditable="false">${display}</span>`
 }
 
@@ -440,14 +463,78 @@ function slotHtml(role: string, content = '', marker = false, className = ''): s
   return `<span class="${classes}" data-slot="${role}">${marker ? '<span data-caret-marker="true"></span>' : ''}${content}</span>`
 }
 
-function fractionHtml(numerator = '', denominator = '', focusNumerator = false): string {
+function fractionHtml(numerator = '', denominator = '', focusNumerator = false, command = '\\frac'): string {
   return [
-    '<span class="math-frac" data-math="frac">',
+    `<span class="math-frac" data-math="frac" data-command="${escapeAttr(command)}">`,
     slotHtml('numerator', numerator, focusNumerator),
     '<span class="math-frac-line"></span>',
     slotHtml('denominator', denominator),
     '</span>',
   ].join('')
+}
+
+function binomHtml(top = '', bottom = '', focusTop = false, command = '\\binom'): string {
+  return [
+    `<span class="math-binom" data-math="binom" data-command="${escapeAttr(command)}">`,
+    '<span class="math-delimiter-mark" contenteditable="false">(</span>',
+    '<span class="math-binom-stack">',
+    slotHtml('top', top, focusTop),
+    slotHtml('bottom', bottom),
+    '</span>',
+    '<span class="math-delimiter-mark" contenteditable="false">)</span>',
+    '</span>',
+  ].join('')
+}
+
+function boxedHtml(body = '', focusBody = false): string {
+  return `<span class="math-boxed" data-math="boxed">${slotHtml('body', body, focusBody)}</span>`
+}
+
+const X_ARROW_DISPLAYS: Record<string, string> = {
+  '\\xleftarrow': '\u2190',
+  '\\xrightarrow': '\u2192',
+  '\\xLeftarrow': '\u21d0',
+  '\\xRightarrow': '\u21d2',
+  '\\xleftrightarrow': '\u2194',
+  '\\xLeftrightarrow': '\u21d4',
+  '\\xhookleftarrow': '\u21a9',
+  '\\xhookrightarrow': '\u21aa',
+  '\\xtwoheadleftarrow': '\u219e',
+  '\\xtwoheadrightarrow': '\u21a0',
+  '\\xleftharpoonup': '\u21bc',
+  '\\xrightharpoonup': '\u21c0',
+  '\\xleftharpoondown': '\u21bd',
+  '\\xrightharpoondown': '\u21c1',
+  '\\xleftrightharpoons': '\u21cb',
+  '\\xrightleftharpoons': '\u21cc',
+  '\\xtofrom': '\u21c4',
+  '\\xmapsto': '\u21a6',
+  '\\xlongequal': '=',
+}
+
+function xArrowHtml(command: string, upper = '', lower = '', focusUpper = false): string {
+  const lowerSlot = lower.trim().length > 0 ? slotHtml('lower', lower) : ''
+  return [
+    `<span class="math-xarrow" data-math="xarrow" data-command="${escapeAttr(command)}">`,
+    slotHtml('upper', upper, focusUpper),
+    `<span class="math-xarrow-symbol" contenteditable="false">${escapeHtml(X_ARROW_DISPLAYS[command] ?? '\u2192')}</span>`,
+    lowerSlot,
+    '</span>',
+  ].join('')
+}
+
+function phantomHtml(command: string, body = '', focusBody = false): string {
+  const kind = command === '\\hphantom' ? 'h' : command === '\\vphantom' ? 'v' : 'both'
+  return `<span class="math-phantom math-phantom-${kind}" data-math="phantom" data-command="${escapeAttr(command)}">${slotHtml('body', body, focusBody)}</span>`
+}
+
+function hspaceHtml(command: string, amount = '', focusAmount = false): string {
+  const star = command === '\\hspace*' ? '*' : ''
+  return `<span class="math-hspace" data-math="hspace" data-command="${escapeAttr(command)}"><span class="math-hspace-arrow" contenteditable="false">↔${star}</span>${slotHtml('amount', amount, focusAmount)}</span>`
+}
+
+function definiteIntegralHtml(lower = '', upper = '', focusLower = false): string {
+  return `<span class="math-definite-integral" data-math="definite-integral"><span class="math-definite-integral-symbol" contenteditable="false">&int;</span><span class="math-definite-integral-bounds">${slotHtml('lower-bound', lower, focusLower, 'math-definite-integral-lower')}${slotHtml('upper-bound', upper, false, 'math-definite-integral-upper')}</span></span>`
 }
 
 function sqrtHtml(body = '', focusBody = false): string {
@@ -486,9 +573,9 @@ function listHtml(format: 'bulletList' | 'numberedList', content = '', marker = 
   return `<span class="text-list text-list-${format}${nestedParentClass}" data-list="${format}"><span class="${markerClass}"${numberAttr} contenteditable="false"></span><span class="text-list-content">${markerHtml}${content}</span></span>`
 }
 
-function oversetHtml(bound = '', base = '', focusBound = false): string {
+function oversetHtml(bound = '', base = '', focusBound = false, command = '\\overset'): string {
   return [
-    '<span class="math-overset" data-math="overset">',
+    `<span class="math-overset" data-math="overset" data-command="${escapeAttr(command)}">`,
     `<span class="math-overset-bound">${slotHtml('bound', bound, focusBound)}</span>`,
     slotHtml('base', base),
     '</span>',
@@ -512,6 +599,119 @@ function bothsetHtml(upper = '', base = '', lower = '', focusUpper = false): str
     `<span class="math-underset-bound">${slotHtml('lower-bound', lower)}</span>`,
     '</span>',
   ].join('')
+}
+
+// SVG strings for accent marks \u2014 width:100% applied via .math-accent-mark svg CSS rule
+const ACCENT_SVG_WIDEHAT = '<svg preserveAspectRatio="none" viewBox="0 0 100 60" style="height:1em"><polyline points="4,56 50,4 96,56" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter"/></svg>'
+const ACCENT_SVG_WIDETILDE = '<svg preserveAspectRatio="none" viewBox="0 0 100 45" style="height:1em"><path d="M4,36 C18,8 38,8 50,22 C62,36 82,36 96,8" fill="none" stroke="currentColor" stroke-width="7"/></svg>'
+const ACCENT_SVG_LEFT_ARROW = '<svg preserveAspectRatio="none" viewBox="0 0 100 20" style="height:1em"><line x1="8" y1="10" x2="99" y2="10" stroke="currentColor" stroke-width="5"/><polyline points="30,2 8,10 30,18" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/></svg>'
+const ACCENT_SVG_RIGHT_ARROW = '<svg preserveAspectRatio="none" viewBox="0 0 100 20" style="height:1em"><line x1="1" y1="10" x2="92" y2="10" stroke="currentColor" stroke-width="5"/><polyline points="70,2 92,10 70,18" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/></svg>'
+const ACCENT_SVG_LEFT_RIGHT_ARROW = '<svg preserveAspectRatio="none" viewBox="0 0 100 20" style="height:1em"><line x1="8" y1="10" x2="92" y2="10" stroke="currentColor" stroke-width="5"/><polyline points="30,2 8,10 30,18" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/><polyline points="70,2 92,10 70,18" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/></svg>'
+const ACCENT_SVG_LEFT_HARPOON = '<svg preserveAspectRatio="none" viewBox="0 0 100 18" style="height:1em"><line x1="8" y1="10" x2="99" y2="10" stroke="currentColor" stroke-width="5"/><line x1="8" y1="10" x2="30" y2="2" stroke="currentColor" stroke-width="5"/></svg>'
+const ACCENT_SVG_RIGHT_HARPOON = '<svg preserveAspectRatio="none" viewBox="0 0 100 18" style="height:1em"><line x1="1" y1="10" x2="92" y2="10" stroke="currentColor" stroke-width="5"/><line x1="92" y1="10" x2="70" y2="2" stroke="currentColor" stroke-width="5"/></svg>'
+const ACCENT_SVG_LINE = '<svg preserveAspectRatio="none" viewBox="0 0 100 8" style="height:0.14em"><line x1="0" y1="4" x2="100" y2="4" stroke="currentColor" stroke-width="8"/></svg>'
+const ACCENT_SVG_GRAVE = '<svg preserveAspectRatio="none" viewBox="0 0 55 80" style="height:1em"><line x1="44" y1="6" x2="11" y2="74" stroke="currentColor" stroke-width="11" stroke-linecap="round"/></svg>'
+const ACCENT_SVG_ACUTE = '<svg preserveAspectRatio="none" viewBox="0 0 55 80" style="height:1em"><line x1="11" y1="74" x2="44" y2="6" stroke="currentColor" stroke-width="11" stroke-linecap="round"/></svg>'
+const ACCENT_SVG_BREVE = '<svg preserveAspectRatio="none" viewBox="0 0 100 55" style="height:0.9em"><path d="M5,8 C5,52 95,52 95,8" fill="none" stroke="currentColor" stroke-width="9"/></svg>'
+const ACCENT_SVG_CHECK = '<svg preserveAspectRatio="none" viewBox="0 0 100 60" style="height:0.9em"><polyline points="4,5 50,55 96,5" fill="none" stroke="currentColor" stroke-width="9" stroke-linejoin="miter"/></svg>'
+const ACCENT_SVG_DOT = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.6em"><circle cx="50" cy="15" r="14" fill="currentColor"/></svg>'
+const ACCENT_SVG_DDOT = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.6em"><circle cx="28" cy="15" r="12" fill="currentColor"/><circle cx="72" cy="15" r="12" fill="currentColor"/></svg>'
+const ACCENT_SVG_DDDOT = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.6em"><circle cx="16" cy="15" r="11" fill="currentColor"/><circle cx="50" cy="15" r="11" fill="currentColor"/><circle cx="84" cy="15" r="11" fill="currentColor"/></svg>'
+const ACCENT_SVG_DDDDOT = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.6em"><circle cx="12" cy="15" r="9" fill="currentColor"/><circle cx="37" cy="15" r="9" fill="currentColor"/><circle cx="63" cy="15" r="9" fill="currentColor"/><circle cx="88" cy="15" r="9" fill="currentColor"/></svg>'
+const ACCENT_SVG_RING = '<svg preserveAspectRatio="none" viewBox="0 0 100 70" style="height:1em"><circle cx="50" cy="35" r="26" fill="none" stroke="currentColor" stroke-width="12"/></svg>'
+const ACCENT_SVG_DOUBLE_ACUTE = '<svg preserveAspectRatio="none" viewBox="0 0 100 80" style="height:1em"><line x1="10" y1="72" x2="40" y2="8" stroke="currentColor" stroke-width="10" stroke-linecap="round"/><line x1="60" y1="72" x2="90" y2="8" stroke="currentColor" stroke-width="10" stroke-linecap="round"/></svg>'
+
+const ACCENT_COMMANDS: Record<string, { markHtml: string; placement: 'over' | 'under' }> = {
+  '\\tilde': { markHtml: ACCENT_SVG_WIDETILDE, placement: 'over' },
+  '\\widetilde': { markHtml: ACCENT_SVG_WIDETILDE, placement: 'over' },
+  '\\acute': { markHtml: ACCENT_SVG_ACUTE, placement: 'over' },
+  '\\bar': { markHtml: ACCENT_SVG_LINE, placement: 'over' },
+  '\\breve': { markHtml: ACCENT_SVG_BREVE, placement: 'over' },
+  '\\check': { markHtml: ACCENT_SVG_CHECK, placement: 'over' },
+  '\\dot': { markHtml: ACCENT_SVG_DOT, placement: 'over' },
+  '\\ddot': { markHtml: ACCENT_SVG_DDOT, placement: 'over' },
+  '\\dddot': { markHtml: ACCENT_SVG_DDDOT, placement: 'over' },
+  '\\ddddot': { markHtml: ACCENT_SVG_DDDDOT, placement: 'over' },
+  '\\grave': { markHtml: ACCENT_SVG_GRAVE, placement: 'over' },
+  '\\hat': { markHtml: ACCENT_SVG_WIDEHAT, placement: 'over' },
+  '\\widehat': { markHtml: ACCENT_SVG_WIDEHAT, placement: 'over' },
+  '\\mathring': { markHtml: ACCENT_SVG_RING, placement: 'over' },
+  '\\vec': { markHtml: ACCENT_SVG_RIGHT_ARROW, placement: 'over' },
+  '\\overline': { markHtml: ACCENT_SVG_LINE, placement: 'over' },
+  '\\underline': { markHtml: ACCENT_SVG_LINE, placement: 'under' },
+  '\\underbar': { markHtml: ACCENT_SVG_LINE, placement: 'under' },
+  '\\overleftarrow': { markHtml: ACCENT_SVG_LEFT_ARROW, placement: 'over' },
+  '\\overrightarrow': { markHtml: ACCENT_SVG_RIGHT_ARROW, placement: 'over' },
+  '\\underleftarrow': { markHtml: ACCENT_SVG_LEFT_ARROW, placement: 'under' },
+  '\\underrightarrow': { markHtml: ACCENT_SVG_RIGHT_ARROW, placement: 'under' },
+  '\\overleftrightarrow': { markHtml: ACCENT_SVG_LEFT_RIGHT_ARROW, placement: 'over' },
+  '\\underleftrightarrow': { markHtml: ACCENT_SVG_LEFT_RIGHT_ARROW, placement: 'under' },
+  '\\overleftharpoon': { markHtml: ACCENT_SVG_LEFT_HARPOON, placement: 'over' },
+  '\\overrightharpoon': { markHtml: ACCENT_SVG_RIGHT_HARPOON, placement: 'over' },
+  "\\'": { markHtml: ACCENT_SVG_ACUTE, placement: 'over' },
+  '\\`': { markHtml: ACCENT_SVG_GRAVE, placement: 'over' },
+  '\\^': { markHtml: ACCENT_SVG_WIDEHAT, placement: 'over' },
+  '\\~': { markHtml: ACCENT_SVG_WIDETILDE, placement: 'over' },
+  '\\=': { markHtml: ACCENT_SVG_LINE, placement: 'over' },
+  '\\u': { markHtml: ACCENT_SVG_BREVE, placement: 'over' },
+  '\\.': { markHtml: ACCENT_SVG_DOT, placement: 'over' },
+  '\\"': { markHtml: ACCENT_SVG_DDOT, placement: 'over' },
+  '\\r': { markHtml: ACCENT_SVG_RING, placement: 'over' },
+  '\\H': { markHtml: ACCENT_SVG_DOUBLE_ACUTE, placement: 'over' },
+  '\\v': { markHtml: ACCENT_SVG_CHECK, placement: 'over' },
+}
+
+function accentHtml(command: string, body = '', focusBody = false): string {
+  const accent = ACCENT_COMMANDS[command]
+  if (!accent) return genericCommandHtml(command, [{ kind: 'required', content: body }], focusBody)
+
+  const mark = `<span class="math-accent-mark" contenteditable="false">${accent.markHtml}</span>`
+  const bodySlot = slotHtml('body', body, focusBody)
+  return `<span class="math-accent math-accent-${accent.placement}" data-math="accent" data-command="${escapeAttr(command)}">${accent.placement === 'over' ? `${mark}${bodySlot}` : `${bodySlot}${mark}`}</span>`
+}
+
+const CANCEL_COMMANDS = new Set(['\\cancel', '\\bcancel', '\\xcancel', '\\sout'])
+
+function cancelHtml(command: string, body = '', focusBody = false): string {
+  const kind = command.slice(1)
+  return `<span class="math-cancel math-cancel-${escapeAttr(kind)}" data-math="cancel" data-command="${escapeAttr(command)}">${slotHtml('body', body, focusBody)}</span>`
+}
+
+function phaseHtml(command: '\\phase' | '\\angln', body = '', focusBody = false): string {
+  if (command === '\\angln') {
+    return `<span class="math-phase math-phase-angln" data-math="phase" data-command="${escapeAttr(command)}">${slotHtml('body', body, focusBody)}</span>`
+  }
+
+  return `<span class="math-phase math-phase-phase" data-math="phase" data-command="${escapeAttr(command)}"><svg class="math-phase-angle-svg" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true" focusable="false"><polyline points="24,3 3,23 100,23" /></svg>${slotHtml('body', body, focusBody)}</span>`
+}
+
+const BRACE_SVG_OVER = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.7em"><path d="M2,28 C2,12 42,10 50,2 C58,10 98,12 98,28" fill="none" stroke="currentColor" stroke-width="3.5"/></svg>'
+const BRACE_SVG_UNDER = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.7em"><path d="M2,2 C2,18 42,20 50,28 C58,20 98,18 98,2" fill="none" stroke="currentColor" stroke-width="3.5"/></svg>'
+
+function braceAccentHtml(command: '\\overbrace' | '\\underbrace', body = '', annotation = '', focusBody = false): string {
+  const isOver = command === '\\overbrace'
+  const mark = `<span class="math-accent-mark math-brace-accent-mark" contenteditable="false">${isOver ? BRACE_SVG_OVER : BRACE_SVG_UNDER}</span>`
+  const bodySlot = slotHtml('body', body, focusBody)
+  const annotationSlot = slotHtml('annotation', annotation)
+  const content = isOver
+    ? `${annotationSlot}${mark}${bodySlot}`
+    : `${bodySlot}${mark}${annotationSlot}`
+  return `<span class="math-accent math-brace-accent math-accent-${isOver ? 'over' : 'under'}" data-math="brace-accent" data-command="${escapeAttr(command)}">${content}</span>`
+}
+
+function modExpressionHtml(
+  kind: 'pmod' | 'pod' | 'mod',
+  left = '',
+  right = '',
+  focusLeft = false,
+): string {
+  if (kind === 'pmod') {
+    return `<span class="math-mod-expression" data-math="mod-expression" data-mod-kind="pmod">${slotHtml('left', left, focusLeft)}<span class="math-mod-expression-mark" contenteditable="false">(mod </span>${slotHtml('right', right)}<span class="math-mod-expression-mark" contenteditable="false">)</span></span>`
+  }
+  if (kind === 'pod') {
+    return `<span class="math-mod-expression" data-math="mod-expression" data-mod-kind="pod">${slotHtml('left', left, focusLeft)}<span class="math-mod-expression-mark" contenteditable="false">(</span>${slotHtml('right', right)}<span class="math-mod-expression-mark" contenteditable="false">)</span></span>`
+  }
+  return `<span class="math-mod-expression" data-math="mod-expression" data-mod-kind="mod">${slotHtml('left', left, focusLeft)}<span class="math-mod-expression-mark" contenteditable="false"> mod </span>${slotHtml('right', right)}</span>`
 }
 
 function delimiterDisplay(delimiter: string): string {
@@ -582,21 +782,62 @@ function commandLabel(command: string): string {
   return command.startsWith('\\') ? command.slice(1) : command
 }
 
+const RAW_LATEX_PREVIEW_COMMANDS = new Set([
+  '\\tilde',
+  '\\widetilde',
+  '\\acute',
+  '\\bar',
+  '\\breve',
+  '\\check',
+  '\\dot',
+  '\\ddot',
+  '\\dddot',
+  '\\ddddot',
+  '\\grave',
+  '\\hat',
+  '\\widehat',
+  '\\mathring',
+  '\\vec',
+  '\\overline',
+  '\\underline',
+  '\\underbar',
+  '\\overbrace',
+  '\\underbrace',
+  '\\overleftarrow',
+  '\\overrightarrow',
+  '\\underleftarrow',
+  '\\underrightarrow',
+  '\\overleftrightarrow',
+  '\\underleftrightarrow',
+  '\\overleftharpoon',
+  '\\overrightharpoon',
+  "\\'",
+  '\\`',
+  '\\^',
+  '\\~',
+  '\\=',
+  '\\u',
+  '\\.',
+  '\\"',
+  '\\r',
+  '\\H',
+  '\\v',
+])
+
 function placeholderTemplateKey(command: string, args: Array<{ kind: GenericArgKind }>): string {
   return `${command}${args.map((arg) => (arg.kind === 'optional' ? '[#?]' : '{#?}')).join('')}`
 }
 
 function commandPreview(command: string, args: Array<{ kind: GenericArgKind }> = []): string {
-  return KATEX_TEMPLATE_PREVIEWS[placeholderTemplateKey(command, args)]
-    ?? KATEX_COMMAND_PREVIEWS[command]
-    ?? commandLabel(command)
+  if (RAW_LATEX_PREVIEW_COMMANDS.has(command)) return command
+  const templateKey = placeholderTemplateKey(command, args)
+  if (templateKey === '\\stackrel{#?}{#?}') return 'stackrel'
+  return COMMAND_DISPLAY[command] ?? LATEX_COMMAND_PREVIEWS[command] ?? commandLabel(command)
 }
 
 function environmentPreview(env: string, args: Array<{ kind: GenericArgKind }>): string {
-  const argTemplate = args.map((arg) => (arg.kind === 'optional' ? '[#?]' : '{#?}')).join('')
-  return KATEX_TEMPLATE_PREVIEWS[`\\begin{${env}}${argTemplate}#?\\end{${env}}`]
-    ?? KATEX_TEMPLATE_PREVIEWS[`\\begin{${env}}#?\\end{${env}}`]
-    ?? env
+  void args
+  return env
 }
 
 function genericCommandHtml(
@@ -642,7 +883,7 @@ function latexTemplateHtml(snippet: string): string {
   const template = snippet.replace(/#\?/g, () => `__slot_${slotIndex++}__`)
   const label = snippet.match(/^\\[a-zA-Z@]+\*?|^\\./)?.[0] ?? 'template'
   const slots = Array.from({ length: slotIndex }, (_, index) => slotHtml(`template-${index}`, '', index === 0)).join('')
-  return `<span class="math-latex-template" data-math="latex-template" data-template="${escapeAttr(template)}"><span class="math-generic-command-label" contenteditable="false">${escapeHtml(KATEX_TEMPLATE_PREVIEWS[snippet] ?? commandLabel(label))}</span>${slots}</span>`
+  return `<span class="math-latex-template" data-math="latex-template" data-template="${escapeAttr(template)}"><span class="math-generic-command-label" contenteditable="false">${escapeHtml(commandLabel(label))}</span>${slots}</span>`
 }
 
 function matrixHtml(env: string, rows: string[][], focusFirstCell = false): string {
@@ -731,8 +972,65 @@ function readCommand(source: string, index: number): { command: string; end: num
   return { command: match[0], end: index + match[0].length }
 }
 
+function skipSpaces(source: string, index: number): number {
+  let cursor = index
+  while (source[cursor] === ' ') cursor += 1
+  return cursor
+}
+
+function readScriptGroup(source: string, index: number, marker: '^' | '_'): { body: string; end: number } | null {
+  const scriptStart = skipSpaces(source, index)
+  if (source[scriptStart] !== marker) return null
+  return readGroupOrToken(source, skipSpaces(source, scriptStart + 1))
+}
+
+function readDefiniteIntegralScripts(source: string, index: number): { lower: string; upper: string; end: number } | null {
+  const firstLower = readScriptGroup(source, index, '_')
+  if (firstLower) {
+    const upper = readScriptGroup(source, firstLower.end, '^')
+    return upper ? { lower: firstLower.body, upper: upper.body, end: upper.end } : null
+  }
+
+  const firstUpper = readScriptGroup(source, index, '^')
+  if (!firstUpper) return null
+  const lower = readScriptGroup(source, firstUpper.end, '_')
+  return lower ? { lower: lower.body, upper: firstUpper.body, end: lower.end } : null
+}
+
 function renderSlotLatex(body: string): string {
   return body.trim().length === 0 ? '' : renderLatexToHtml(body)
+}
+
+function tryRenderModExpression(source: string, index: number): { html: string; end: number } | null {
+  const leftGroup = readGroup(source, skipSpaces(source, index))
+  if (!leftGroup) return null
+
+  const commandStart = skipSpaces(source, leftGroup.end)
+  if (source[commandStart] !== '\\') return null
+  const { command, end } = readCommand(source, commandStart)
+
+  if (command === '\\pmod' || command === '\\pod') {
+    const rightGroup = readGroupAfterSpaces(source, end)
+    if (!rightGroup) return null
+    return {
+      html: modExpressionHtml(
+        command === '\\pmod' ? 'pmod' : 'pod',
+        renderSlotLatex(leftGroup.body),
+        renderSlotLatex(rightGroup.body),
+      ),
+      end: rightGroup.end,
+    }
+  }
+
+  if (command === '\\mod') {
+    const right = readGroupOrToken(source, skipSpaces(source, end))
+    return {
+      html: modExpressionHtml('mod', renderSlotLatex(leftGroup.body), renderSlotLatex(right.body)),
+      end: right.end,
+    }
+  }
+
+  return null
 }
 
 function splitMatrixRows(body: string): string[][] {
@@ -958,16 +1256,42 @@ function renderLatexToHtml(latex: string): string {
       continue
     }
 
+    const modExpression = tryRenderModExpression(source, index)
+    if (modExpression) {
+      html += modExpression.html
+      index = modExpression.end
+      continue
+    }
+
     const char = source[index]
 
     if (char === '\\') {
       const { command, end } = readCommand(source, index)
-      if (command === '\\frac') {
+      if (command === '\\int') {
+        const scripts = readDefiniteIntegralScripts(source, end)
+        if (scripts) {
+          html += definiteIntegralHtml(renderSlotLatex(scripts.lower), renderSlotLatex(scripts.upper))
+          index = scripts.end
+          continue
+        }
+      }
+
+      if (command === '\\frac' || command === '\\dfrac' || command === '\\tfrac') {
         const numerator = readGroup(source, end)
         const denominator = numerator ? readGroup(source, numerator.end) : null
         if (numerator && denominator) {
-          html += fractionHtml(renderSlotLatex(numerator.body), renderSlotLatex(denominator.body))
+          html += fractionHtml(renderSlotLatex(numerator.body), renderSlotLatex(denominator.body), false, command)
           index = denominator.end
+          continue
+        }
+      }
+
+      if (command === '\\binom') {
+        const top = readGroup(source, end)
+        const bottom = top ? readGroup(source, top.end) : null
+        if (top && bottom) {
+          html += binomHtml(renderSlotLatex(top.body), renderSlotLatex(bottom.body), false, command)
+          index = bottom.end
           continue
         }
       }
@@ -993,6 +1317,57 @@ function renderLatexToHtml(latex: string): string {
         }
       }
 
+      if (command === '\\boxed') {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += boxedHtml(renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (command === '\\stackrel') {
+        const upper = readGroup(source, end)
+        const base = upper ? readGroupAfterSpaces(source, upper.end) : null
+        if (upper && base) {
+          html += oversetHtml(renderSlotLatex(upper.body), renderSlotLatex(base.body), false, command)
+          index = base.end
+          continue
+        }
+      }
+
+      if (command === '\\phantom' || command === '\\hphantom' || command === '\\vphantom') {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += phantomHtml(command, renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (command === '\\hspace' || command === '\\hspace*') {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += hspaceHtml(command, renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (X_ARROW_DISPLAYS[command]) {
+        const lower = readBracketGroupAfterSpaces(source, end)
+        const upper = readGroupAfterSpaces(source, lower?.end ?? end)
+        if (upper) {
+          html += xArrowHtml(
+            command,
+            renderSlotLatex(upper.body),
+            lower ? renderSlotLatex(lower.body) : '',
+          )
+          index = upper.end
+          continue
+        }
+      }
+
       if (command === '\\operatorname' || command === '\\operatorname*' || command === '\\operatornamewithlimits') {
         const group = readGroup(source, end)
         if (group) {
@@ -1004,6 +1379,51 @@ function renderLatexToHtml(latex: string): string {
           } else {
             index = group.end
           }
+          continue
+        }
+      }
+
+      if (ACCENT_COMMANDS[command]) {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += accentHtml(command, renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (CANCEL_COMMANDS.has(command)) {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += cancelHtml(command, renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (command === '\\phase' || command === '\\angln') {
+        const group = readGroupAfterSpaces(source, end)
+        if (group) {
+          html += phaseHtml(command, renderSlotLatex(group.body))
+          index = group.end
+          continue
+        }
+      }
+
+      if (command === '\\overbrace' || command === '\\underbrace') {
+        const body = readGroupAfterSpaces(source, end)
+        if (body) {
+          const scriptToken = command === '\\overbrace' ? '^' : '_'
+          const scriptStart = skipSpaces(source, body.end)
+          const annotation = source[scriptStart] === scriptToken
+            ? readGroupOrToken(source, skipSpaces(source, scriptStart + 1))
+            : null
+          html += braceAccentHtml(
+            command,
+            renderSlotLatex(body.body),
+            annotation ? renderSlotLatex(annotation.body) : '',
+          )
+          index = annotation?.end ?? body.end
           continue
         }
       }
@@ -1097,6 +1517,12 @@ function renderLatexToHtml(latex: string): string {
         index = group.end
         continue
       }
+    }
+
+    if (char === '~') {
+      html += commandHtml('~')
+      index += 1
+      continue
     }
 
     html += escapeHtml(char ?? '')
@@ -1206,9 +1632,44 @@ function serializeNode(node: Node): string {
   }
 
   if (mathKind === 'frac') {
+    const command = node.dataset.command || '\\frac'
     const numerator = serializeDirectSlot(node, 'numerator') || ' '
     const denominator = serializeDirectSlot(node, 'denominator') || ' '
-    return `\\frac{${numerator}}{${denominator}}`
+    return `${command}{${numerator}}{${denominator}}`
+  }
+
+  if (mathKind === 'binom') {
+    const command = node.dataset.command || '\\binom'
+    const top = serializeDirectSlot(node, 'top') || ' '
+    const bottom = serializeDirectSlot(node, 'bottom') || ' '
+    return `${command}{${top}}{${bottom}}`
+  }
+
+  if (mathKind === 'boxed') {
+    return `\\boxed{${serializeDirectSlot(node, 'body') || ' '}}`
+  }
+
+  if (mathKind === 'xarrow') {
+    const command = node.dataset.command || '\\xrightarrow'
+    const upper = serializeDirectSlot(node, 'upper') || ' '
+    const lower = serializeDirectSlot(node, 'lower')
+    return lower ? `${command}[${lower}]{${upper}}` : `${command}{${upper}}`
+  }
+
+  if (mathKind === 'phantom') {
+    const command = node.dataset.command || '\\phantom'
+    return `${command}{${serializeDirectSlot(node, 'body') || ' '}}`
+  }
+
+  if (mathKind === 'hspace') {
+    const command = node.dataset.command || '\\hspace'
+    return `${command}{${serializeDirectSlot(node, 'amount') || ' '}}`
+  }
+
+  if (mathKind === 'definite-integral') {
+    const lower = serializeDirectSlot(node, 'lower-bound') || ' '
+    const upper = serializeDirectSlot(node, 'upper-bound') || ' '
+    return `\\int_{${lower}}^{${upper}}`
   }
 
   if (mathKind === 'sqrt') {
@@ -1222,9 +1683,10 @@ function serializeNode(node: Node): string {
   }
 
   if (mathKind === 'overset') {
+    const command = node.dataset.command || '\\overset'
     const bound = serializeSlot(node, 'bound') || ' '
     const base = serializeSlot(node, 'base') || ' '
-    return `\\overset{${bound}}{${base}}`
+    return `${command}{${bound}}{${base}}`
   }
 
   if (mathKind === 'underset') {
@@ -1238,6 +1700,39 @@ function serializeNode(node: Node): string {
     const base = serializeSlot(node, 'base') || ' '
     const lower = serializeSlot(node, 'lower-bound') || ' '
     return `\\overset{${upper}}{\\underset{${lower}}{${base}}}`
+  }
+
+  if (mathKind === 'accent') {
+    const command = node.dataset.command ?? ''
+    return `${command}{${serializeDirectSlot(node, 'body') || ' '}}`
+  }
+
+  if (mathKind === 'cancel') {
+    const command = node.dataset.command ?? '\\cancel'
+    return `${command}{${serializeDirectSlot(node, 'body') || ' '}}`
+  }
+
+  if (mathKind === 'phase') {
+    const command = node.dataset.command ?? '\\phase'
+    return `${command}{${serializeDirectSlot(node, 'body') || ' '}}`
+  }
+
+  if (mathKind === 'brace-accent') {
+    const command = node.dataset.command
+    const body = serializeDirectSlot(node, 'body') || ' '
+    const annotation = serializeDirectSlot(node, 'annotation') || ' '
+    return command === '\\underbrace'
+      ? `\\underbrace{${body}}_{${annotation}}`
+      : `\\overbrace{${body}}^{${annotation}}`
+  }
+
+  if (mathKind === 'mod-expression') {
+    const kind = node.dataset.modKind
+    const left = serializeSlot(node, 'left') || ' '
+    const right = serializeSlot(node, 'right') || ' '
+    if (kind === 'pmod') return `{${left}} \\pmod{${right}}`
+    if (kind === 'pod') return `{${left}} \\pod{${right}}`
+    return `{${left}}\\mod {${right}}`
   }
 
   if (mathKind === 'sup') {
@@ -1284,18 +1779,27 @@ function serializeEditor(editor: HTMLElement): string {
   return serializeChildren(editor).replace(/\s+/g, ' ').trim()
 }
 
-function getLatexSourceSnippet(snippet: string, mode: InsertMode = 'write'): string {
-  if (mode === 'template') return snippet.replace(/#\?/g, ' ')
-  if (mode === 'func-slot') return `${snippet}{ }`
-  if (mode === 'latex' || mode === 'write') return snippet
+function fillFirstLatexSlot(snippet: string, content: string): string {
+  if (!content) return snippet
+  if (snippet.includes('#?')) return snippet.replace('#?', content).replace(/#\?/g, ' ')
+  if (snippet.includes('{ }')) return snippet.replace('{ }', `{${content}}`)
+  return snippet
+}
+
+function getLatexSourceSnippet(snippet: string, mode: InsertMode = 'write', selected = ''): string {
+  const selectedSlotContent = selected || ' '
+
+  if (mode === 'template') return fillFirstLatexSlot(snippet, selected).replace(/#\?/g, ' ')
+  if (mode === 'func-slot') return `${snippet}{${selectedSlotContent}}`
+  if (mode === 'latex' || mode === 'write') return fillFirstLatexSlot(snippet, selected)
 
   const templates: Record<string, string> = {
-    '^': '^{ }',
-    '_': '_{ }',
-    '\\frac': '\\frac{ }{ }',
-    '\\sqrt': '\\sqrt{ }',
-    '\\sqrt[]': '\\sqrt[ ]{ }',
-    '\\text': '\\text{ }',
+    '^': selected ? `${selected}^{ }` : '^{ }',
+    '_': selected ? `${selected}_{ }` : '_{ }',
+    '\\frac': `\\frac{${selectedSlotContent}}{ }`,
+    '\\sqrt': `\\sqrt{${selectedSlotContent}}`,
+    '\\sqrt[]': `\\sqrt[${selectedSlotContent}]{ }`,
+    '\\text': `\\text{${selectedSlotContent}}`,
   }
 
   return templates[snippet] ?? snippet
@@ -1319,6 +1823,8 @@ function htmlForSnippet(snippet: string, mode: InsertMode = 'write'): string {
   if (mode === 'func-slot') {
     return `${commandHtml(snippet)}${slotHtml('function-arg', '', true)}`
   }
+
+  if (snippet === '\\int_{ }^{ }' || snippet === '\\int_{#?}^{#?}') return definiteIntegralHtml('', '', true)
 
   if (mode === 'cmd') {
     if (snippet === '^') return scriptTemplateHtml('sup')
@@ -1957,7 +2463,11 @@ function selectionIsInsideTabEntry(selection: Selection, entry: TabTraversalEntr
   }
 
   if (entry.kind === 'slot') {
-    return selection.rangeCount > 0 && collapsedRangesAreEqual(selection.getRangeAt(0), rangeForTabTraversalEntry(entry))
+    if (selection.rangeCount === 0) return false
+    if (collapsedRangesAreEqual(selection.getRangeAt(0), rangeForTabTraversalEntry(entry))) return true
+    if (!selection.anchorNode || !entry.element.contains(selection.anchorNode)) return false
+    if (!slotHasTabbableContent(entry.element)) return entry.edge === 'start'
+    return caretIsAtSlotEdge(entry.element, entry.edge === 'end')
   }
 
   return Boolean(selection.anchorNode && entry.element.contains(selection.anchorNode)) || selectionSelectsElement(selection, entry.element)
@@ -2251,20 +2761,37 @@ function isTextInputKey(event: React.KeyboardEvent<HTMLDivElement>): boolean {
   return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey
 }
 
-function insertHtmlAtSelection(root: HTMLElement, html: string): void {
+function firstSlotInFragment(fragment: DocumentFragment): HTMLElement | null {
+  return fragment.querySelector<HTMLElement>('.math-slot')
+}
+
+function placeFragmentInSlot(slot: HTMLElement, content: DocumentFragment): void {
+  slot.querySelectorAll('[data-caret-marker="true"]').forEach((marker) => marker.remove())
+  slot.appendChild(content)
+
+  const marker = document.createElement('span')
+  marker.dataset.caretMarker = 'true'
+  slot.appendChild(marker)
+}
+
+function insertHtmlAtSelection(root: HTMLElement, html: string, fillFirstSlotWithSelection = false): void {
   root.focus()
   if (!selectionIsInside(root)) focusAtEnd(root)
+  normalizeSelectionAroundMathElements(root)
   normalizeSelectionForTyping(root)
 
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0) return
 
   const range = selection.getRangeAt(0)
-  range.deleteContents()
-
   const template = document.createElement('template')
   template.innerHTML = html
   const fragment = template.content
+  const slot = fillFirstSlotWithSelection && !range.collapsed ? firstSlotInFragment(fragment) : null
+  const selectedContent = slot ? range.extractContents() : null
+  if (!selectedContent) range.deleteContents()
+  if (slot && selectedContent) placeFragmentInSlot(slot, selectedContent)
+
   const lastChild = fragment.lastChild
   range.insertNode(fragment)
 
@@ -2543,11 +3070,12 @@ export function CellEditor({
 
   const insertIntoLatexSource = useCallback((snippet: string, mode: InsertMode = 'write') => {
     const textarea = latexTextareaRef.current
-    const latexSnippet = getLatexSourceSnippet(snippet, mode)
     const currentCell = cellRef.current
     const currentLatex = currentCell.latex || ''
     const start = textarea?.selectionStart ?? currentLatex.length
     const end = textarea?.selectionEnd ?? start
+    const selected = currentLatex.slice(start, end)
+    const latexSnippet = getLatexSourceSnippet(snippet, mode, selected)
     const selectionBefore = getSelectionState()
     const nextLatex = `${currentLatex.slice(0, start)}${latexSnippet}${currentLatex.slice(end)}`
     const nextCursor = start + latexSnippet.length
@@ -2567,7 +3095,7 @@ export function CellEditor({
 
     onActivateRef.current()
     const selectionBefore = visualSelectionState(editor)
-    insertHtmlAtSelection(editor, htmlForSnippet(snippet, mode))
+    insertHtmlAtSelection(editor, htmlForSnippet(snippet, mode), true)
     commitVisualEditor({ kind: 'insert', selectionBefore })
   }, [commitVisualEditor])
 

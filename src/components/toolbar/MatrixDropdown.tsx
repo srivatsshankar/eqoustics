@@ -20,6 +20,15 @@ interface DelimiterSizeOption {
   rightCommand: string
 }
 
+interface MatrixEnvironmentOption {
+  id: string
+  label: string
+  env: string
+  preview: string
+  description: string
+  usesCustomDelimiters?: boolean
+}
+
 const MATRIX_DELIMITERS: MatrixDelimiterOption[] = [
   { id: 'none', label: 'None', preview: 'A', left: '', right: '' },
   { id: 'paren', label: 'Parentheses', preview: '( )', left: '(', right: ')' },
@@ -51,6 +60,18 @@ const DELIMITER_SIZES: DelimiterSizeOption[] = [
   { id: 'largest', label: 'Largest', leftCommand: '\\Biggl', rightCommand: '\\Biggr' },
 ]
 
+const MATRIX_ENVIRONMENTS: MatrixEnvironmentOption[] = [
+  { id: 'custom', label: 'Custom', env: 'matrix', preview: 'A', description: 'Plain matrix with custom delimiters', usesCustomDelimiters: true },
+  { id: 'matrix', label: 'matrix', env: 'matrix', preview: 'A', description: 'Plain matrix with no brackets' },
+  { id: 'pmatrix', label: 'pmatrix', env: 'pmatrix', preview: '(A)', description: 'Matrix with parentheses' },
+  { id: 'bmatrix', label: 'bmatrix', env: 'bmatrix', preview: '[A]', description: 'Matrix with square brackets' },
+  { id: 'vmatrix', label: 'vmatrix', env: 'vmatrix', preview: '|A|', description: 'Matrix with single vertical bars' },
+  { id: 'Vmatrix', label: 'Vmatrix', env: 'Vmatrix', preview: '||A||', description: 'Matrix with double vertical bars' },
+  { id: 'Bmatrix', label: 'Bmatrix', env: 'Bmatrix', preview: '{A}', description: 'Matrix with curly braces' },
+  { id: 'smallmatrix', label: 'smallmatrix', env: 'smallmatrix', preview: 'a b', description: 'Compact inline matrix' },
+  { id: 'array', label: 'array', env: 'array', preview: 'A:B', description: 'Column-aligned array with column spec' },
+]
+
 function parsedDimension(value: number | string): number {
   return typeof value === 'string' ? parseInt(value, 10) : value
 }
@@ -61,6 +82,7 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
   const [hoverCols, setHoverCols] = useState(0)
   const [manualRows, setManualRows] = useState<number | string>(3)
   const [manualCols, setManualCols] = useState<number | string>(3)
+  const [environmentId, setEnvironmentId] = useState(MATRIX_ENVIRONMENTS[0].id)
   const [delimiterId, setDelimiterId] = useState(MATRIX_DELIMITERS[1].id)
   const [sizeId, setSizeId] = useState(DELIMITER_SIZES[0].id)
 
@@ -79,6 +101,17 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
   const generateMatrixLatex = (rows: number, cols: number) => {
     const row = Array.from({ length: cols }, () => '#?').join(' & ')
     const body = Array.from({ length: rows }, () => row).join(' \\\\ ')
+    const environment = MATRIX_ENVIRONMENTS.find((option) => option.id === environmentId) ?? MATRIX_ENVIRONMENTS[0]
+
+    if (environment.env === 'array') {
+      const columnSpec = 'c'.repeat(Math.max(cols, 1))
+      return `\\begin{array}{${columnSpec}} ${body} \\end{array}`
+    }
+
+    if (!environment.usesCustomDelimiters) {
+      return `\\begin{${environment.env}} ${body} \\end{${environment.env}}`
+    }
+
     const matrix = `\\begin{matrix} ${body} \\end{matrix}`
     const delimiter = MATRIX_DELIMITERS.find((option) => option.id === delimiterId) ?? MATRIX_DELIMITERS[1]
     if (!delimiter.left && !delimiter.right) return matrix
@@ -115,42 +148,73 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
       {isOpen ? (
         <div className="matrix-dropdown-popover">
           <div className="matrix-dropdown-section">
-            <span className="matrix-dropdown-label">Delimiters</span>
-            <div className="matrix-delimiter-grid" role="radiogroup" aria-label="Matrix delimiters">
-              {MATRIX_DELIMITERS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`matrix-option-button${delimiterId === option.id ? ' matrix-option-button-active' : ''}`}
-                  aria-label={option.label}
-                  aria-pressed={delimiterId === option.id}
-                  title={option.label}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => setDelimiterId(option.id)}
-                >
-                  <span className="matrix-option-preview">{option.preview}</span>
-                </button>
+            <span className="matrix-dropdown-label">Environment</span>
+            <div className="matrix-env-row" role="radiogroup" aria-label="Matrix environments">
+              {MATRIX_ENVIRONMENTS.map((option) => (
+                <span key={option.id} className="cell-button-tooltip-wrap">
+                  <button
+                    type="button"
+                    className={`matrix-env-button${environmentId === option.id ? ' matrix-env-button-active' : ''}`}
+                    aria-label={`${option.label}: ${option.description}`}
+                    aria-pressed={environmentId === option.id}
+                    title={`${option.label}: ${option.description}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setEnvironmentId(option.id)}
+                  >
+                    <span className="matrix-env-button-icon">{option.preview}</span>
+                    <span className="matrix-env-button-label">{option.label}</span>
+                  </button>
+                  <span className="cell-button-tooltip">{option.description}</span>
+                </span>
               ))}
             </div>
           </div>
 
-          <div className="matrix-dropdown-section">
-            <span className="matrix-dropdown-label">Bracket size</span>
-            <div className="matrix-size-row" role="radiogroup" aria-label="Matrix delimiter size">
-              {DELIMITER_SIZES.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`matrix-size-button${sizeId === option.id ? ' matrix-size-button-active' : ''}`}
-                  aria-pressed={sizeId === option.id}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => setSizeId(option.id)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {environmentId === 'custom' ? (
+            <>
+              <div className="matrix-dropdown-section">
+                <span className="matrix-dropdown-label">Delimiters</span>
+                <div className="matrix-delimiter-grid" role="radiogroup" aria-label="Matrix delimiters">
+                  {MATRIX_DELIMITERS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`matrix-option-button${delimiterId === option.id ? ' matrix-option-button-active' : ''}`}
+                      aria-label={option.label}
+                      aria-pressed={delimiterId === option.id}
+                      title={option.label}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setDelimiterId(option.id)}
+                    >
+                      <span className="matrix-option-preview">{option.preview}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="matrix-dropdown-section">
+                <span className="matrix-dropdown-label">Bracket size</span>
+                <div className="matrix-size-row" role="radiogroup" aria-label="Matrix delimiter size">
+                  {DELIMITER_SIZES.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`matrix-size-button${sizeId === option.id ? ' matrix-size-button-active' : ''}`}
+                      aria-pressed={sizeId === option.id}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setSizeId(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {environmentId === 'array' ? (
+            <span className="matrix-array-help">`array` uses centered columns based on selected width.</span>
+          ) : null}
 
           <div className="matrix-dropdown-divider" />
 

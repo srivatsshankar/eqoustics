@@ -25,7 +25,7 @@ import {
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
 import { MatrixDropdown } from './MatrixDropdown'
 import type { TextFormatCommand } from '../cell/CellEditor'
-import { KATEX_COMMAND_PREVIEWS, KATEX_TEMPLATE_PREVIEWS } from '../../shared/katexPreviews'
+import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
@@ -45,7 +45,7 @@ interface EditorToolbarProps {
 }
 
 interface SymbolItem {
-  display: string
+  display: React.ReactNode
   /** The LaTeX string to insert */
   value: string
   title: string
@@ -61,8 +61,23 @@ interface SymbolGroup {
   items: SymbolItem[]
 }
 
+interface DelimiterPairOption {
+  id: string
+  label: string
+  preview: React.ReactNode
+  left: string
+  right: string
+}
+
+interface DelimiterSizePreset {
+  id: string
+  label: string
+  left: string
+  right: string
+}
+
 function commandDisplay(value: string): string {
-  if (KATEX_COMMAND_PREVIEWS[value]) return KATEX_COMMAND_PREVIEWS[value]
+  if (LATEX_COMMAND_PREVIEWS[value]) return LATEX_COMMAND_PREVIEWS[value]
   if (value.startsWith('\\')) return value.slice(1)
   return value
 }
@@ -80,12 +95,313 @@ function commandItems(values: string[]): SymbolItem[] {
   }))
 }
 
-function templateItem(display: string, value: string, title = commandTitle(value, display)): SymbolItem {
-  return { display: KATEX_TEMPLATE_PREVIEWS[value] ?? display, value, title, mode: 'template' }
+function latexSlotItem(display: React.ReactNode, value: string, title = commandTitle(value, typeof display === 'string' ? display : value)): SymbolItem {
+  return { display, value, title, mode: 'write' }
 }
 
-function templateItems(items: Array<[string, string, string?]>): SymbolItem[] {
-  return items.map(([display, value, title]) => templateItem(display, value, title))
+const Slot = () => (
+  <span className="symbol-dropdown-item-variant-slot" aria-hidden="true">
+    <FontAwesomeIcon icon={faSquareRegular} />
+  </span>
+)
+
+const FractionDisplay = () => (
+  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', fontSize: '0.8em', lineHeight: 1 }}>
+    <Slot />
+    <div style={{ width: '100%', height: '1px', backgroundColor: 'currentColor', margin: '2px 0' }} />
+    <Slot />
+  </div>
+)
+
+const DefiniteIntegralDisplay = () => (
+  <span style={{ display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle', lineHeight: 1 }}>
+    <span style={{ fontSize: '1.35em', lineHeight: 1 }}>∫</span>
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px', marginLeft: '1px', fontSize: '0.68em' }}>
+      <Slot />
+      <Slot />
+    </span>
+  </span>
+)
+
+const TextFractionDisplay = ({ numerator, denominator }: { numerator: string; denominator: string }) => (
+  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', fontSize: '0.8em', lineHeight: 1 }}>
+    <span>{numerator}</span>
+    <div style={{ width: '100%', height: '1px', backgroundColor: 'currentColor', margin: '2px 0' }} />
+    <span>{denominator}</span>
+  </div>
+)
+
+const ExtensibleArrow = ({ arrow }: { arrow: string }) => (
+  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', lineHeight: 1, gap: '2px' }}>
+    <Slot />
+    <span>{arrow}</span>
+  </div>
+)
+
+const CancelPreview = ({ kind }: { kind: 'cancel' | 'bcancel' | 'xcancel' | 'sout' }) => (
+  <span
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+      padding: '1px 3px',
+      lineHeight: 1,
+    }}
+  >
+    <Slot />
+    {(kind === 'cancel' || kind === 'xcancel') && (
+      <span aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid currentColor', transform: 'rotate(-18deg)' }} />
+    )}
+    {(kind === 'bcancel' || kind === 'xcancel') && (
+      <span aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid currentColor', transform: 'rotate(18deg)' }} />
+    )}
+    {kind === 'sout' && (
+      <span aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid currentColor' }} />
+    )}
+  </span>
+)
+
+const SpaceDisplay = ({ width, label, isNegative = false }: { width: number; label: string; isNegative?: boolean }) => (
+  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', gap: '2px' }} title={label}>
+    <div style={{
+      width: `${width}px`,
+      minWidth: '2px',
+      height: '10px',
+      borderLeft: '1px solid currentColor',
+      borderRight: '1px solid currentColor',
+      backgroundColor: isNegative ? 'rgba(255, 0, 0, 0.2)' : 'currentColor',
+      opacity: isNegative ? 1 : 0.3,
+      position: 'relative'
+    }}>
+      <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: '1px', backgroundColor: 'currentColor', transform: 'translateY(-50%)' }} />
+    </div>
+    <span style={{ fontSize: '0.6em', opacity: 0.7, whiteSpace: 'nowrap' }}>{label}</span>
+  </div>
+)
+
+const NewlineDisplay = ({ label }: { label: string }) => (
+  <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', gap: '2px' }} title={label}>
+    <span style={{ fontSize: '1.1em', lineHeight: 1 }}>{'\u21b5'}</span>
+    <span style={{ fontSize: '0.6em', opacity: 0.7, whiteSpace: 'nowrap' }}>{label}</span>
+  </div>
+)
+
+
+// SVG components for accent marks in toolbar previews
+const s = { height: '1em', display: 'block', width: '100%' } as const
+const sd = { height: '0.6em', display: 'block', width: '100%' } as const
+const WideHatSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 60" style={s}><polyline points="4,56 50,4 96,56" fill="none" stroke="currentColor" strokeWidth={7} strokeLinejoin="miter" /></svg>
+const WideTildeSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 45" style={s}><path d="M4,36 C18,8 38,8 50,22 C62,36 82,36 96,8" fill="none" stroke="currentColor" strokeWidth={7} /></svg>
+const LineSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 8" style={{ height: '0.14em', display: 'block', width: '100%' }}><line x1="0" y1="4" x2="100" y2="4" stroke="currentColor" strokeWidth={8} /></svg>
+const GraveSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 55 80" style={s}><line x1="44" y1="6" x2="11" y2="74" stroke="currentColor" strokeWidth={11} strokeLinecap="round" /></svg>
+const AcuteSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 55 80" style={s}><line x1="11" y1="74" x2="44" y2="6" stroke="currentColor" strokeWidth={11} strokeLinecap="round" /></svg>
+const BreveSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 55" style={{ ...s, height: '0.9em' }}><path d="M5,8 C5,52 95,52 95,8" fill="none" stroke="currentColor" strokeWidth={9} /></svg>
+const CheckSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 60" style={{ ...s, height: '0.9em' }}><polyline points="4,5 50,55 96,5" fill="none" stroke="currentColor" strokeWidth={9} strokeLinejoin="miter" /></svg>
+const DotSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={sd}><circle cx="50" cy="15" r="14" fill="currentColor" /></svg>
+const DdotSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={sd}><circle cx="28" cy="15" r="12" fill="currentColor" /><circle cx="72" cy="15" r="12" fill="currentColor" /></svg>
+const DddotSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={sd}><circle cx="16" cy="15" r="11" fill="currentColor" /><circle cx="50" cy="15" r="11" fill="currentColor" /><circle cx="84" cy="15" r="11" fill="currentColor" /></svg>
+const DdddotSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={sd}><circle cx="12" cy="15" r="9" fill="currentColor" /><circle cx="37" cy="15" r="9" fill="currentColor" /><circle cx="63" cy="15" r="9" fill="currentColor" /><circle cx="88" cy="15" r="9" fill="currentColor" /></svg>
+const RingSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 70" style={s}><circle cx="50" cy="35" r="26" fill="none" stroke="currentColor" strokeWidth={12} /></svg>
+const DoubleAcuteSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 80" style={s}><line x1="10" y1="72" x2="40" y2="8" stroke="currentColor" strokeWidth={10} strokeLinecap="round" /><line x1="60" y1="72" x2="90" y2="8" stroke="currentColor" strokeWidth={10} strokeLinecap="round" /></svg>
+const LeftArrowSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 20" style={s}><line x1="8" y1="10" x2="99" y2="10" stroke="currentColor" strokeWidth={5} /><polyline points="30,2 8,10 30,18" fill="none" stroke="currentColor" strokeWidth={5} strokeLinejoin="miter" /></svg>
+const RightArrowSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 20" style={s}><line x1="1" y1="10" x2="92" y2="10" stroke="currentColor" strokeWidth={5} /><polyline points="70,2 92,10 70,18" fill="none" stroke="currentColor" strokeWidth={5} strokeLinejoin="miter" /></svg>
+const LeftRightArrowSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 20" style={s}><line x1="8" y1="10" x2="92" y2="10" stroke="currentColor" strokeWidth={5} /><polyline points="30,2 8,10 30,18" fill="none" stroke="currentColor" strokeWidth={5} strokeLinejoin="miter" /><polyline points="70,2 92,10 70,18" fill="none" stroke="currentColor" strokeWidth={5} strokeLinejoin="miter" /></svg>
+const LeftHarpoonSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 18" style={s}><line x1="8" y1="10" x2="99" y2="10" stroke="currentColor" strokeWidth={5} /><line x1="8" y1="10" x2="30" y2="2" stroke="currentColor" strokeWidth={5} /></svg>
+const RightHarpoonSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 18" style={s}><line x1="1" y1="10" x2="92" y2="10" stroke="currentColor" strokeWidth={5} /><line x1="92" y1="10" x2="70" y2="2" stroke="currentColor" strokeWidth={5} /></svg>
+const OverbraceSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={{ height: '0.7em', display: 'block', width: '100%' }}><path d="M2,28 C2,12 42,10 50,2 C58,10 98,12 98,28" fill="none" stroke="currentColor" strokeWidth={3.5} /></svg>
+const UnderbraceSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={{ height: '0.7em', display: 'block', width: '100%' }}><path d="M2,2 C2,18 42,20 50,28 C58,20 98,18 98,2" fill="none" stroke="currentColor" strokeWidth={3.5} /></svg>
+
+const MathAccentPreview = ({ mark, markEl, placement = 'over', wide = false }: { mark?: string; markEl?: React.ReactNode; placement?: 'over' | 'under'; wide?: boolean }) => {
+  const markContent = markEl ?? mark
+  return (
+    <span className={`math-accent math-accent-${placement}`} style={{ fontSize: '0.72em' }}>
+      {placement === 'over' && <span className="math-accent-mark" style={{ color: 'currentColor' }}>{markContent}</span>}
+      <span style={{ fontStyle: 'italic' }}>{wide ? 'xp' : 'x'}</span>
+      {placement === 'under' && <span className="math-accent-mark" style={{ color: 'currentColor' }}>{markContent}</span>}
+    </span>
+  )
+}
+
+const OverbracePreview = () => (
+  <span className="math-accent math-brace-accent math-accent-over" style={{ fontSize: '0.72em', verticalAlign: 'middle' }}>
+    <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span>
+    <span className="math-accent-mark math-brace-accent-mark" style={{ color: 'currentColor' }}><OverbraceSvg /></span>
+    <span style={{ fontStyle: 'italic' }}>xp</span>
+  </span>
+)
+
+const UnderbracePreview = () => (
+  <span className="math-accent math-brace-accent math-accent-under" style={{ fontSize: '0.72em', verticalAlign: 'middle' }}>
+    <span style={{ fontStyle: 'italic' }}>xp</span>
+    <span className="math-accent-mark math-brace-accent-mark" style={{ color: 'currentColor' }}><UnderbraceSvg /></span>
+    <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span>
+  </span>
+)
+
+function slotTemplateKey(value: string): string {
+  return value.replace(/\{\s*(?:#\?)?\s*\}/g, '{#?}')
+}
+
+function symbolItemDisplay(item: SymbolItem): React.ReactNode {
+  return cleanSymbolItemDisplay(item)
+}
+
+function symbolItemTitle(item: SymbolItem): string {
+  return item.mode === 'cmd' ? commandTitle(item.value) : item.title
+}
+
+function cleanSymbolItemDisplay(item: SymbolItem): React.ReactNode {
+  if (typeof item.display === 'object' && item.display !== null) return item.display
+  if (item.mode === 'cmd') return commandDisplay(item.value)
+  if (!item.value.startsWith('\\') && !item.value.includes('#?')) return item.value
+  if (item.value === '\\frac{dy}{dx}') return <TextFractionDisplay numerator="dy" denominator="dx" />
+  if (item.value.startsWith('\\operatorname')) return item.display
+
+  const key = slotTemplateKey(item.value)
+  switch (key) {
+    case '\\frac{#?}{#?}':
+      return <FractionDisplay />
+    case '\\tfrac{#?}{#?}':
+      return <span style={{ fontSize: '0.85em' }}><FractionDisplay /></span>
+    case '\\dfrac{#?}{#?}':
+      return <span style={{ fontSize: '1.15em' }}><FractionDisplay /></span>
+    case '\\binom{#?}{#?}':
+      return (
+        <div style={{ display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle', fontSize: '0.8em', lineHeight: 1 }}>
+          <span style={{ fontSize: '1.5em', fontWeight: 300, marginRight: '2px' }}>(</span>
+          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}><Slot /><Slot /></div>
+          <span style={{ fontSize: '1.5em', fontWeight: 300, marginLeft: '2px' }}>)</span>
+        </div>
+      )
+    case '\\tilde{#?}':
+    case '\\~{#?}':
+      return <MathAccentPreview markEl={<WideTildeSvg />} />
+    case '\\widetilde{#?}':
+      return <MathAccentPreview markEl={<WideTildeSvg />} wide />
+    case '\\acute{#?}':
+    case "\\'{#?}":
+      return <MathAccentPreview markEl={<AcuteSvg />} />
+    case '\\bar{#?}':
+    case '\\={#?}':
+      return <MathAccentPreview markEl={<LineSvg />} />
+    case '\\breve{#?}':
+    case '\\u{#?}':
+      return <MathAccentPreview markEl={<BreveSvg />} />
+    case '\\check{#?}':
+    case '\\v{#?}':
+      return <MathAccentPreview markEl={<CheckSvg />} />
+    case '\\dot{#?}':
+    case '\\.{#?}':
+      return <MathAccentPreview markEl={<DotSvg />} />
+    case '\\ddot{#?}':
+    case '\\"{#?}':
+      return <MathAccentPreview markEl={<DdotSvg />} />
+    case '\\dddot{#?}':
+      return <MathAccentPreview markEl={<DddotSvg />} />
+    case '\\ddddot{#?}':
+      return <MathAccentPreview markEl={<DdddotSvg />} />
+    case '\\grave{#?}':
+    case '\\`{#?}':
+      return <MathAccentPreview markEl={<GraveSvg />} />
+    case '\\hat{#?}':
+    case '\\^{#?}':
+      return <MathAccentPreview markEl={<WideHatSvg />} />
+    case '\\widehat{#?}':
+      return <MathAccentPreview markEl={<WideHatSvg />} wide />
+    case '\\H{#?}':
+      return <MathAccentPreview markEl={<DoubleAcuteSvg />} />
+    case '\\mathring{#?}':
+    case '\\r{#?}':
+      return <MathAccentPreview markEl={<RingSvg />} />
+    case '\\vec{#?}':
+      return <MathAccentPreview markEl={<RightArrowSvg />} />
+    case '\\overrightarrow{#?}':
+      return <MathAccentPreview markEl={<RightArrowSvg />} wide />
+    case '\\overline{#?}':
+      return <MathAccentPreview markEl={<LineSvg />} wide />
+    case '\\underline{#?}':
+    case '\\underbar{#?}':
+      return <MathAccentPreview markEl={<LineSvg />} placement="under" wide />
+    case '\\overbrace{#?}^{#?}':
+      return <OverbracePreview />
+    case '\\underbrace{#?}_{#?}':
+      return <UnderbracePreview />
+    case '\\overleftarrow{#?}':
+      return <MathAccentPreview markEl={<LeftArrowSvg />} wide />
+    case '\\underleftarrow{#?}':
+      return <MathAccentPreview markEl={<LeftArrowSvg />} placement="under" wide />
+    case '\\underrightarrow{#?}':
+      return <MathAccentPreview markEl={<RightArrowSvg />} placement="under" wide />
+    case '\\overleftrightarrow{#?}':
+      return <MathAccentPreview markEl={<LeftRightArrowSvg />} wide />
+    case '\\underleftrightarrow{#?}':
+      return <MathAccentPreview markEl={<LeftRightArrowSvg />} placement="under" wide />
+    case '\\overleftharpoon{#?}':
+      return <MathAccentPreview markEl={<LeftHarpoonSvg />} wide />
+    case '\\overrightharpoon{#?}':
+      return <MathAccentPreview markEl={<RightHarpoonSvg />} wide />
+    case '{#?} \\pmod{#?}':
+      return <><Slot /> (mod <Slot />)</>
+    case '{#?} \\pod{#?}':
+      return <><Slot /> (<Slot />)</>
+    case '{#?}\\mod {#?}':
+      return <><Slot /> mod <Slot /></>
+    case '\\int_{#?}^{#?}':
+      return <DefiniteIntegralDisplay />
+    case '\\left\\langle{#?}\\right\\rangle':
+      return <>{'\u27e8'}<Slot />{'\u27e9'}</>
+    case '\\left\\lvert{#?}\\right\\rangle':
+      return <>|<Slot />{'\u27e9'}</>
+    case '\\left\\langle{#?}\\right\\rvert':
+      return <>{'\u27e8'}<Slot />|</>
+    case '\\left\\lbrace{#?}\\right\\rbrace':
+      return <>{'{'}<Slot />{'}'}</>
+    case '\\boxed{#?}':
+      return <span style={{ border: '1px solid currentColor', padding: '2px', display: 'inline-block', lineHeight: 1 }}><Slot /></span>
+    case '\\stackrel{#?}{#?}':
+      return <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', lineHeight: 1, gap: '2px' }}><span style={{ fontSize: '0.7em' }}><Slot /></span><Slot /></div>
+    case '\\phantom{#?}':
+      return <span style={{ opacity: 0.65, border: '1px dashed currentColor', padding: '1px' }}><Slot /></span>
+    case '\\hphantom{#?}':
+      return <span style={{ opacity: 0.65, borderTop: '1px dashed currentColor', borderBottom: '1px dashed currentColor', padding: '1px' }}>{'\u2194'}<Slot />{'\u2194'}</span>
+    case '\\vphantom{#?}':
+      return <span style={{ opacity: 0.65, borderLeft: '1px dashed currentColor', borderRight: '1px dashed currentColor', padding: '1px' }}>{'\u2195'}<Slot />{'\u2195'}</span>
+    case '\\hspace{#?}':
+      return <>{'\u2194'} <Slot /></>
+    case '\\hspace*{#?}':
+      return <>{'\u2194'}* <Slot /></>
+    default: {
+      const command = key.match(/^\\[a-zA-Z]+\*?/)?.[0] ?? ''
+      if (command.startsWith('\\x')) return <ExtensibleArrow arrow={LATEX_COMMAND_PREVIEWS[command] ?? '\u2192'} />
+      return command ? commandDisplay(command) : item.display
+    }
+  }
+}
+
+function delimiterPreview(option: DelimiterPairOption): React.ReactNode {
+  switch (option.id) {
+    case 'paren':
+      return <>(<Slot />)</>
+    case 'bracket':
+      return <>[<Slot />]</>
+    case 'brace':
+      return <>{'{'}<Slot />{'}'}</>
+    case 'angle':
+      return <>{'\u27e8'}<Slot />{'\u27e9'}</>
+    case 'single-bar':
+      return <>|<Slot />|</>
+    case 'double-bar':
+      return <>{'\u2016'}<Slot />{'\u2016'}</>
+    case 'ceiling':
+      return <>{'\u2308'}<Slot />{'\u2309'}</>
+    case 'floor':
+      return <>{'\u230a'}<Slot />{'\u230b'}</>
+    case 'double-bracket':
+      return <>{'\u27e6'}<Slot />{'\u27e7'}</>
+    default:
+      return option.preview
+  }
 }
 
 const GREEK_ALIAS_VALUES = [
@@ -95,25 +411,213 @@ const GREEK_ALIAS_VALUES = [
   '\\varPsi', '\\varOmega',
 ]
 
-const SYMBOL_GROUPS: SymbolGroup[] = [
-  {
-    label: 'Structures',
-    items: [
-      { display: '∫', value: '\\int', title: 'Integral', mode: 'cmd' },
-      { display: '∑', value: '\\sum', title: 'Summation', mode: 'cmd' },
-      { display: '∏', value: '\\prod', title: 'Product', mode: 'cmd' },
-    ],
-  },
+const DELIMITER_PAIR_OPTIONS: DelimiterPairOption[] = [
+  { id: 'paren', label: 'Parentheses', preview: <>(<Slot />)</>, left: '(', right: ')' },
+  { id: 'bracket', label: 'Brackets', preview: <>[<Slot />]</>, left: '[', right: ']' },
+  { id: 'brace', label: 'Braces', preview: <>{'{'}<Slot />{'}'}</>, left: '\\lbrace', right: '\\rbrace' },
+  { id: 'angle', label: 'Angles', preview: <>⟨<Slot />⟩</>, left: '\\langle', right: '\\rangle' },
+  { id: 'single-bar', label: 'Bars', preview: <>|<Slot />|</>, left: '\\lvert', right: '\\rvert' },
+  { id: 'double-bar', label: 'Double bars', preview: <>‖<Slot />‖</>, left: '\\lVert', right: '\\rVert' },
+  { id: 'ceiling', label: 'Ceiling', preview: <>⌈<Slot />⌉</>, left: '\\lceil', right: '\\rceil' },
+  { id: 'floor', label: 'Floor', preview: <>⌊<Slot />⌋</>, left: '\\lfloor', right: '\\rfloor' },
+  { id: 'double-bracket', label: 'Double brackets', preview: <>⟦<Slot />⟧</>, left: '\\llbracket', right: '\\rrbracket' },
+]
 
+const DELIMITER_SIZE_PRESETS: DelimiterSizePreset[] = [
+  { id: 'small', label: 'Small', left: '\\bigl', right: '\\bigr' },
+  { id: 'medium', label: 'Medium', left: '\\Bigl', right: '\\Bigr' },
+  { id: 'large', label: 'Large', left: '\\biggl', right: '\\biggr' },
+  { id: 'largest', label: 'Largest', left: '\\Biggl', right: '\\Biggr' },
+]
+
+const RELATIONS_COMMON_ITEMS: SymbolItem[] = [
+  { display: '=', value: '=', title: 'Equals', mode: 'write' },
+  { display: commandDisplay('\\ne'), value: '\\ne', title: 'Not equal', mode: 'cmd' },
+  { display: commandDisplay('\\le'), value: '\\le', title: 'Less or equal', mode: 'cmd' },
+  { display: commandDisplay('\\ge'), value: '\\ge', title: 'Greater or equal', mode: 'cmd' },
+  { display: commandDisplay('\\approx'), value: '\\approx', title: 'Approximately', mode: 'cmd' },
+  { display: commandDisplay('\\propto'), value: '\\propto', title: 'Proportional to', mode: 'cmd' },
+]
+
+const RELATIONS_OTHER_VALUES = [
+  '<', '>', ':', '\\leq', '\\geq', '\\neq', '\\lt', '\\gt', '\\doteqdot', '\\eqcirc', '\\eqcolon',
+  '\\minuscolon', '\\Eqcolon', '\\minuscoloncolon', '\\eqqcolon', '\\equalscolon', '\\Eqqcolon',
+  '\\equalscoloncolon', '\\approxcolon', '\\approxcoloncolon', '\\approxeq', '\\asymp', '\\backepsilon',
+  '\\backsim', '\\backsimeq', '\\between', '\\bowtie', '\\bumpeq', '\\Bumpeq', '\\circeq',
+  '\\colonapprox', '\\Colonapprox', '\\coloncolonapprox', '\\coloneq', '\\colonminus', '\\Coloneq',
+  '\\coloncolonminus', '\\coloneqq', '\\colonequals', '\\Coloneqq', '\\coloncolonequals',
+  '\\colonsim', '\\Colonsim', '\\coloncolonsim', '\\cong', '\\curlyeqprec', '\\curlyeqsucc',
+  '\\dashv', '\\dblcolon', '\\coloncolon', '\\doteq', '\\Doteq', '\\eqsim', '\\eqslantgtr',
+  '\\eqslantless', '\\equiv', '\\fallingdotseq', '\\frown', '\\geqq', '\\geqslant', '\\gg',
+  '\\ggg', '\\gggtr', '\\gtrapprox', '\\gtreqless', '\\gtreqqless', '\\gtrless', '\\gtrsim',
+  '\\imageof', '\\Join', '\\leqq', '\\leqslant', '\\lessapprox', '\\lesseqgtr', '\\lesseqqgtr',
+  '\\lessgtr', '\\lesssim', '\\ll', '\\lll', '\\llless', '\\models', '\\multimap', '\\origof',
+  '\\owns', '\\parallel', '\\perp', '\\pitchfork', '\\prec', '\\precapprox', '\\preccurlyeq',
+  '\\preceq', '\\precsim', '\\risingdotseq', '\\shortmid', '\\shortparallel', '\\sim', '\\simeq',
+  '\\smallfrown', '\\smallsmile', '\\smile', '\\sqsubset', '\\sqsubseteq', '\\sqsupset',
+  '\\sqsupseteq', '\\sub', '\\sube', '\\Subset', '\\subseteqq', '\\succ', '\\succapprox',
+  '\\succcurlyeq', '\\succeq', '\\succsim', '\\supe', '\\Supset', '\\supseteqq', '\\thickapprox',
+  '\\thicksim', '\\trianglelefteq', '\\triangleq', '\\trianglerighteq', '\\varpropto',
+  '\\vartriangle', '\\vartriangleleft', '\\vartriangleright', '\\vcentcolon', '\\ratio',
+  '\\vdash', '\\vDash', '\\Vdash', '\\Vvdash',
+]
+
+const RELATIONS_NEGATED_VALUES = [
+  '\\not', '\\gnapprox', '\\gneq', '\\gneqq', '\\gnsim', '\\gvertneqq', '\\lnapprox', '\\lneq',
+  '\\lneqq', '\\lnsim', '\\lvertneqq', '\\ncong', '\\ne', '\\neq', '\\ngeq', '\\ngeqq',
+  '\\ngeqslant', '\\ngtr', '\\nleq', '\\nleqq', '\\nleqslant', '\\nless', '\\nmid',
+  '\\notin', '\\notni', '\\nparallel', '\\nprec', '\\npreceq', '\\nshortmid',
+  '\\nshortparallel', '\\nsim', '\\nsubseteq', '\\nsubseteqq', '\\nsucc', '\\nsucceq',
+  '\\nsupseteq', '\\nsupseteqq', '\\ntriangleleft', '\\ntrianglelefteq', '\\ntriangleright',
+  '\\ntrianglerighteq', '\\nvdash', '\\nvDash', '\\nVDash', '\\nVdash', '\\precnapprox',
+  '\\precneqq', '\\precnsim', '\\subsetneq', '\\subsetneqq', '\\succnapprox', '\\succneqq',
+  '\\succnsim', '\\supsetneq', '\\supsetneqq', '\\varsubsetneq', '\\varsubsetneqq',
+  '\\varsupsetneq', '\\varsupsetneqq',
+]
+
+const OPERATORS_COMMON_VALUES = [
+  '\\sum', '\\prod', '\\coprod', '\\int', '\\intop', '\\smallint', '\\iint', '\\iiint', '\\oint',
+  '\\oiint', '\\oiiint', '\\bigotimes', '\\bigoplus', '\\bigodot', '\\biguplus', '\\bigsqcup',
+  '\\bigvee', '\\bigwedge', '\\bigcap', '\\bigcup',
+]
+
+const OPERATORS_COMMON_ITEMS = commandItems(OPERATORS_COMMON_VALUES)
+
+const OPERATORS_MISC_ITEMS: SymbolItem[] = [
+  { display: '+', value: '+', title: 'Plus (+)', mode: 'write' },
+  { display: commandDisplay('\\cdot'), value: '\\cdot', title: commandTitle('\\cdot'), mode: 'cmd' },
+  { display: commandDisplay('\\gtrdot'), value: '\\gtrdot', title: commandTitle('\\gtrdot'), mode: 'cmd' },
+  { display: <><Slot /> (mod <Slot />)</>, value: '{#?} \\pmod{#?}', title: '\\pmod with slots', mode: 'write' },
+  { display: '-', value: '-', title: 'Minus (-)', mode: 'write' },
+  { display: commandDisplay('\\cdotp'), value: '\\cdotp', title: commandTitle('\\cdotp'), mode: 'cmd' },
+  { display: commandDisplay('\\intercal'), value: '\\intercal', title: commandTitle('\\intercal'), mode: 'cmd' },
+  { display: <><Slot /> (<Slot />)</>, value: '{#?} \\pod{#?}', title: '\\pod with slots', mode: 'write' },
+  { display: '/', value: '/', title: 'Slash (/)', mode: 'write' },
+  { display: commandDisplay('\\centerdot'), value: '\\centerdot', title: commandTitle('\\centerdot'), mode: 'cmd' },
+  { display: commandDisplay('\\land'), value: '\\land', title: commandTitle('\\land'), mode: 'cmd' },
+  { display: commandDisplay('\\rhd'), value: '\\rhd', title: commandTitle('\\rhd'), mode: 'cmd' },
+  { display: commandDisplay('*'), value: '*', title: 'Asterisk (*)', mode: 'write' },
+  { display: commandDisplay('\\circ'), value: '\\circ', title: commandTitle('\\circ'), mode: 'cmd' },
+  { display: commandDisplay('\\leftthreetimes'), value: '\\leftthreetimes', title: commandTitle('\\leftthreetimes'), mode: 'cmd' },
+  { display: commandDisplay('\\rightthreetimes'), value: '\\rightthreetimes', title: commandTitle('\\rightthreetimes'), mode: 'cmd' },
+  { display: commandDisplay('\\amalg'), value: '\\amalg', title: commandTitle('\\amalg'), mode: 'cmd' },
+  { display: commandDisplay('\\circledast'), value: '\\circledast', title: commandTitle('\\circledast'), mode: 'cmd' },
+  { display: '..', value: '\\ldotp', title: commandTitle('\\ldotp', '..'), mode: 'cmd' },
+  { display: commandDisplay('\\rtimes'), value: '\\rtimes', title: commandTitle('\\rtimes'), mode: 'cmd' },
+  { display: '&', value: '\\And', title: commandTitle('\\And', '&'), mode: 'cmd' },
+  { display: commandDisplay('\\circledcirc'), value: '\\circledcirc', title: commandTitle('\\circledcirc'), mode: 'cmd' },
+  { display: commandDisplay('\\lor'), value: '\\lor', title: commandTitle('\\lor'), mode: 'cmd' },
+  { display: commandDisplay('\\setminus'), value: '\\setminus', title: commandTitle('\\setminus'), mode: 'cmd' },
+  { display: commandDisplay('\\ast'), value: '\\ast', title: commandTitle('\\ast'), mode: 'cmd' },
+  { display: commandDisplay('\\circleddash'), value: '\\circleddash', title: commandTitle('\\circleddash'), mode: 'cmd' },
+  { display: commandDisplay('\\lessdot'), value: '\\lessdot', title: commandTitle('\\lessdot'), mode: 'cmd' },
+  { display: commandDisplay('\\smallsetminus'), value: '\\smallsetminus', title: commandTitle('\\smallsetminus'), mode: 'cmd' },
+  { display: commandDisplay('\\barwedge'), value: '\\barwedge', title: commandTitle('\\barwedge'), mode: 'cmd' },
+  { display: commandDisplay('\\Cup'), value: '\\Cup', title: commandTitle('\\Cup'), mode: 'cmd' },
+  { display: commandDisplay('\\lhd'), value: '\\lhd', title: commandTitle('\\lhd'), mode: 'cmd' },
+  { display: commandDisplay('\\sqcap'), value: '\\sqcap', title: commandTitle('\\sqcap'), mode: 'cmd' },
+  { display: commandDisplay('\\bigcirc'), value: '\\bigcirc', title: commandTitle('\\bigcirc'), mode: 'cmd' },
+  { display: commandDisplay('\\cup'), value: '\\cup', title: commandTitle('\\cup'), mode: 'cmd' },
+  { display: commandDisplay('\\ltimes'), value: '\\ltimes', title: commandTitle('\\ltimes'), mode: 'cmd' },
+  { display: commandDisplay('\\sqcup'), value: '\\sqcup', title: commandTitle('\\sqcup'), mode: 'cmd' },
+  { display: '%', value: '\\bmod', title: commandTitle('\\bmod', '%'), mode: 'cmd' },
+  { display: commandDisplay('\\curlyvee'), value: '\\curlyvee', title: commandTitle('\\curlyvee'), mode: 'cmd' },
+  { display: <><Slot /> mod <Slot /></>, value: '{#?}\\mod {#?}', title: '\\mod with slots', mode: 'write' },
+  { display: commandDisplay('\\times'), value: '\\times', title: commandTitle('\\times'), mode: 'cmd' },
+  { display: commandDisplay('\\boxdot'), value: '\\boxdot', title: commandTitle('\\boxdot'), mode: 'cmd' },
+  { display: commandDisplay('\\curlywedge'), value: '\\curlywedge', title: commandTitle('\\curlywedge'), mode: 'cmd' },
+  { display: commandDisplay('\\mp'), value: '\\mp', title: commandTitle('\\mp'), mode: 'cmd' },
+  { display: commandDisplay('\\unlhd'), value: '\\unlhd', title: commandTitle('\\unlhd'), mode: 'cmd' },
+  { display: commandDisplay('\\boxminus'), value: '\\boxminus', title: commandTitle('\\boxminus'), mode: 'cmd' },
+  { display: commandDisplay('\\div'), value: '\\div', title: commandTitle('\\div'), mode: 'cmd' },
+  { display: commandDisplay('\\odot'), value: '\\odot', title: commandTitle('\\odot'), mode: 'cmd' },
+  { display: commandDisplay('\\unrhd'), value: '\\unrhd', title: commandTitle('\\unrhd'), mode: 'cmd' },
+  { display: commandDisplay('\\boxplus'), value: '\\boxplus', title: commandTitle('\\boxplus'), mode: 'cmd' },
+  { display: commandDisplay('\\divideontimes'), value: '\\divideontimes', title: commandTitle('\\divideontimes'), mode: 'cmd' },
+  { display: commandDisplay('\\ominus'), value: '\\ominus', title: commandTitle('\\ominus'), mode: 'cmd' },
+  { display: commandDisplay('\\uplus'), value: '\\uplus', title: commandTitle('\\uplus'), mode: 'cmd' },
+  { display: commandDisplay('\\boxtimes'), value: '\\boxtimes', title: commandTitle('\\boxtimes'), mode: 'cmd' },
+  { display: commandDisplay('\\dotplus'), value: '\\dotplus', title: commandTitle('\\dotplus'), mode: 'cmd' },
+  { display: commandDisplay('\\oplus'), value: '\\oplus', title: commandTitle('\\oplus'), mode: 'cmd' },
+  { display: commandDisplay('\\vee'), value: '\\vee', title: commandTitle('\\vee'), mode: 'cmd' },
+  { display: commandDisplay('\\bullet'), value: '\\bullet', title: commandTitle('\\bullet'), mode: 'cmd' },
+  { display: commandDisplay('\\doublebarwedge'), value: '\\doublebarwedge', title: commandTitle('\\doublebarwedge'), mode: 'cmd' },
+  { display: commandDisplay('\\otimes'), value: '\\otimes', title: commandTitle('\\otimes'), mode: 'cmd' },
+  { display: commandDisplay('\\veebar'), value: '\\veebar', title: commandTitle('\\veebar'), mode: 'cmd' },
+  { display: commandDisplay('\\Cap'), value: '\\Cap', title: commandTitle('\\Cap'), mode: 'cmd' },
+  { display: commandDisplay('\\doublecap'), value: '\\doublecap', title: commandTitle('\\doublecap'), mode: 'cmd' },
+  { display: commandDisplay('\\oslash'), value: '\\oslash', title: commandTitle('\\oslash'), mode: 'cmd' },
+  { display: commandDisplay('\\wedge'), value: '\\wedge', title: commandTitle('\\wedge'), mode: 'cmd' },
+  { display: commandDisplay('\\cap'), value: '\\cap', title: commandTitle('\\cap'), mode: 'cmd' },
+  { display: commandDisplay('\\doublecup'), value: '\\doublecup', title: commandTitle('\\doublecup'), mode: 'cmd' },
+  { display: commandDisplay('\\pm'), value: '\\pm', title: commandTitle('\\pm'), mode: 'cmd' },
+  { display: commandDisplay('\\plusmn'), value: '\\plusmn', title: commandTitle('\\plusmn'), mode: 'cmd' },
+  { display: commandDisplay('\\wr'), value: '\\wr', title: commandTitle('\\wr'), mode: 'cmd' },
+]
+
+const ARROWS_COMMON_ITEMS: SymbolItem[] = [
+  { display: commandDisplay('\\rightarrow'), value: '\\rightarrow', title: 'Right arrow', mode: 'cmd' },
+  { display: commandDisplay('\\leftarrow'), value: '\\leftarrow', title: 'Left arrow', mode: 'cmd' },
+  { display: commandDisplay('\\leftrightarrow'), value: '\\leftrightarrow', title: 'Both arrows', mode: 'cmd' },
+  { display: commandDisplay('\\uparrow'), value: '\\uparrow', title: 'Up arrow', mode: 'cmd' },
+  { display: commandDisplay('\\downarrow'), value: '\\downarrow', title: 'Down arrow', mode: 'cmd' },
+  { display: commandDisplay('\\updownarrow'), value: '\\updownarrow', title: 'Up-down arrow', mode: 'cmd' },
+  { display: commandDisplay('\\Rightarrow'), value: '\\Rightarrow', title: 'Implies', mode: 'cmd' },
+  { display: commandDisplay('\\Leftarrow'), value: '\\Leftarrow', title: 'Implied by', mode: 'cmd' },
+  { display: commandDisplay('\\Leftrightarrow'), value: '\\Leftrightarrow', title: 'If and only if', mode: 'cmd' },
+  { display: commandDisplay('\\Uparrow'), value: '\\Uparrow', title: 'Double up arrow', mode: 'cmd' },
+  { display: commandDisplay('\\Downarrow'), value: '\\Downarrow', title: 'Double down arrow', mode: 'cmd' },
+  { display: commandDisplay('\\Updownarrow'), value: '\\Updownarrow', title: 'Double up-down arrow', mode: 'cmd' },
+  { display: commandDisplay('\\mapsto'), value: '\\mapsto', title: 'Maps to', mode: 'cmd' },
+]
+
+const ARROWS_MORE_VALUES = [
+  '\\circlearrowleft', '\\circlearrowright', '\\curvearrowleft', '\\curvearrowright',
+  '\\dashleftarrow', '\\dashrightarrow', '\\downdownarrows', '\\downharpoonleft',
+  '\\downharpoonright', '\\gets', '\\hookleftarrow', '\\hookrightarrow', '\\iff',
+  '\\impliedby', '\\implies', '\\leadsto', '\\Leftarrow', '\\leftarrowtail', '\\leftharpoondown',
+  '\\leftharpoonup', '\\leftleftarrows', '\\leftrightarrows', '\\leftrightharpoons',
+  '\\leftrightsquigarrow', '\\Lleftarrow', '\\longleftarrow', '\\Longleftarrow',
+  '\\longleftrightarrow', '\\Longleftrightarrow', '\\longmapsto', '\\longrightarrow',
+  '\\Longrightarrow', '\\looparrowleft', '\\looparrowright', '\\Lsh', '\\mapsto',
+  '\\nearrow', '\\nleftarrow', '\\nLeftarrow', '\\nleftrightarrow', '\\nLeftrightarrow',
+  '\\nrightarrow', '\\nRightarrow', '\\nwarrow', '\\restriction', '\\rightarrowtail',
+  '\\rightharpoondown', '\\rightharpoonup', '\\rightleftarrows', '\\rightleftharpoons',
+  '\\rightrightarrows', '\\rightsquigarrow', '\\Rrightarrow', '\\Rsh', '\\searrow',
+  '\\swarrow', '\\to', '\\twoheadleftarrow', '\\twoheadrightarrow', '\\upharpoonleft',
+  '\\upharpoonright', '\\upuparrows',
+]
+const ARROWS_MORE_ITEMS = commandItems(ARROWS_MORE_VALUES)
+
+const ARROWS_EXTENSIBLE_ITEMS: SymbolItem[] = [
+  latexSlotItem('←', '\\xleftarrow{#?}'),
+  latexSlotItem('→', '\\xrightarrow{#?}'),
+  latexSlotItem('⇐', '\\xLeftarrow{#?}'),
+  latexSlotItem('⇒', '\\xRightarrow{#?}'),
+  latexSlotItem('↔', '\\xleftrightarrow{#?}'),
+  latexSlotItem('⇔', '\\xLeftrightarrow{#?}'),
+  latexSlotItem('↩', '\\xhookleftarrow{#?}'),
+  latexSlotItem('↪', '\\xhookrightarrow{#?}'),
+  latexSlotItem('↞', '\\xtwoheadleftarrow{#?}'),
+  latexSlotItem('↠', '\\xtwoheadrightarrow{#?}'),
+  latexSlotItem('↼', '\\xleftharpoonup{#?}'),
+  latexSlotItem('⇀', '\\xrightharpoonup{#?}'),
+  latexSlotItem('↽', '\\xleftharpoondown{#?}'),
+  latexSlotItem('⇁', '\\xrightharpoondown{#?}'),
+  latexSlotItem('⇋', '\\xleftrightharpoons{#?}'),
+  latexSlotItem('⇌', '\\xrightleftharpoons{#?}'),
+  latexSlotItem('⇄', '\\xtofrom{#?}'),
+  latexSlotItem('↦', '\\xmapsto{#?}'),
+  latexSlotItem('=', '\\xlongequal{#?}'),
+]
+
+const SYMBOL_GROUPS: SymbolGroup[] = [
   {
     label: 'Relations',
     items: [
-      { display: '=', value: '=', title: 'Equals', mode: 'write' },
-      { display: '≠', value: '\\ne', title: 'Not equal', mode: 'cmd' },
-      { display: '≤', value: '\\le', title: 'Less or equal', mode: 'cmd' },
-      { display: '≥', value: '\\ge', title: 'Greater or equal', mode: 'cmd' },
-      { display: '≈', value: '\\approx', title: 'Approximately', mode: 'cmd' },
-      { display: '∝', value: '\\propto', title: 'Proportional to', mode: 'cmd' },
+      ...RELATIONS_COMMON_ITEMS,
+      ...commandItems(RELATIONS_OTHER_VALUES),
+      ...commandItems(RELATIONS_NEGATED_VALUES),
     ],
   },
   {
@@ -121,140 +625,136 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
     items: [
       { display: '+', value: '+', title: 'Plus', mode: 'write' },
       { display: '-', value: '-', title: 'Minus', mode: 'write' },
-      { display: '×', value: '\\times', title: 'Multiplication (cross)', mode: 'cmd' },
-      { display: '·', value: '\\cdot', title: 'Multiplication (dot)', mode: 'cmd' },
-      { display: '÷', value: '\\div', title: 'Division', mode: 'cmd' },
+      { display: commandDisplay('\\times'), value: '\\times', title: 'Multiplication (cross)', mode: 'cmd' },
+      { display: commandDisplay('\\cdot'), value: '\\cdot', title: 'Multiplication (dot)', mode: 'cmd' },
+      { display: commandDisplay('\\div'), value: '\\div', title: 'Division', mode: 'cmd' },
     ],
   },
   {
     label: 'Greek',
     items: [
-      { display: 'α', value: '\\alpha', title: 'Alpha (\\alpha)', mode: 'cmd' },
-      { display: 'β', value: '\\beta', title: 'Beta (\\beta)', mode: 'cmd' },
-      { display: 'γ', value: '\\gamma', title: 'Gamma (\\gamma)', mode: 'cmd' },
-      { display: 'δ', value: '\\delta', title: 'Delta (\\delta)', mode: 'cmd' },
-      { display: 'ε', value: '\\epsilon', title: 'Epsilon (\\epsilon)', mode: 'cmd' },
-      { display: 'ϵ', value: '\\varepsilon', title: 'Variant epsilon (\\varepsilon)', mode: 'cmd' },
-      { display: 'ζ', value: '\\zeta', title: 'Zeta (\\zeta)', mode: 'cmd' },
-      { display: 'η', value: '\\eta', title: 'Eta (\\eta)', mode: 'cmd' },
-      { display: 'θ', value: '\\theta', title: 'Theta (\\theta)', mode: 'cmd' },
-      { display: 'ϑ', value: '\\vartheta', title: 'Variant theta (\\vartheta)', mode: 'cmd' },
-      { display: 'ι', value: '\\iota', title: 'Iota (\\iota)', mode: 'cmd' },
-      { display: 'κ', value: '\\kappa', title: 'Kappa (\\kappa)', mode: 'cmd' },
-      { display: 'ϰ', value: '\\varkappa', title: 'Variant kappa (\\varkappa)', mode: 'cmd' },
-      { display: 'λ', value: '\\lambda', title: 'Lambda (\\lambda)', mode: 'cmd' },
-      { display: 'μ', value: '\\mu', title: 'Mu (\\mu)', mode: 'cmd' },
-      { display: 'ν', value: '\\nu', title: 'Nu (\\nu)', mode: 'cmd' },
+      { display: commandDisplay('\\alpha'), value: '\\alpha', title: 'Alpha (\\alpha)', mode: 'cmd' },
+      { display: commandDisplay('\\beta'), value: '\\beta', title: 'Beta (\\beta)', mode: 'cmd' },
+      { display: commandDisplay('\\gamma'), value: '\\gamma', title: 'Gamma (\\gamma)', mode: 'cmd' },
+      { display: commandDisplay('\\delta'), value: '\\delta', title: 'Delta (\\delta)', mode: 'cmd' },
+      { display: commandDisplay('\\epsilon'), value: '\\epsilon', title: 'Epsilon (\\epsilon)', mode: 'cmd' },
+      { display: commandDisplay('\\varepsilon'), value: '\\varepsilon', title: 'Variant epsilon (\\varepsilon)', mode: 'cmd' },
+      { display: commandDisplay('\\zeta'), value: '\\zeta', title: 'Zeta (\\zeta)', mode: 'cmd' },
+      { display: commandDisplay('\\eta'), value: '\\eta', title: 'Eta (\\eta)', mode: 'cmd' },
+      { display: commandDisplay('\\theta'), value: '\\theta', title: 'Theta (\\theta)', mode: 'cmd' },
+      { display: commandDisplay('\\vartheta'), value: '\\vartheta', title: 'Variant theta (\\vartheta)', mode: 'cmd' },
+      { display: commandDisplay('\\iota'), value: '\\iota', title: 'Iota (\\iota)', mode: 'cmd' },
+      { display: commandDisplay('\\kappa'), value: '\\kappa', title: 'Kappa (\\kappa)', mode: 'cmd' },
+      { display: commandDisplay('\\varkappa'), value: '\\varkappa', title: 'Variant kappa (\\varkappa)', mode: 'cmd' },
+      { display: commandDisplay('\\lambda'), value: '\\lambda', title: 'Lambda (\\lambda)', mode: 'cmd' },
+      { display: commandDisplay('\\mu'), value: '\\mu', title: 'Mu (\\mu)', mode: 'cmd' },
+      { display: commandDisplay('\\nu'), value: '\\nu', title: 'Nu (\\nu)', mode: 'cmd' },
       { display: 'o', value: 'o', title: 'Omicron', mode: 'write' },
-      { display: 'ξ', value: '\\xi', title: 'Xi (\\xi)', mode: 'cmd' },
-      { display: 'π', value: '\\pi', title: 'Pi (\\pi)', mode: 'cmd' },
-      { display: 'ϖ', value: '\\varpi', title: 'Variant pi (\\varpi)', mode: 'cmd' },
-      { display: 'ρ', value: '\\rho', title: 'Rho (\\rho)', mode: 'cmd' },
-      { display: 'ϱ', value: '\\varrho', title: 'Variant rho (\\varrho)', mode: 'cmd' },
-      { display: 'σ', value: '\\sigma', title: 'Sigma (\\sigma)', mode: 'cmd' },
-      { display: 'ς', value: '\\varsigma', title: 'Final sigma (\\varsigma)', mode: 'cmd' },
-      { display: 'τ', value: '\\tau', title: 'Tau (\\tau)', mode: 'cmd' },
-      { display: 'υ', value: '\\upsilon', title: 'Upsilon (\\upsilon)', mode: 'cmd' },
-      { display: 'φ', value: '\\phi', title: 'Phi (\\phi)', mode: 'cmd' },
-      { display: 'ϕ', value: '\\varphi', title: 'Variant phi (\\varphi)', mode: 'cmd' },
-      { display: 'χ', value: '\\chi', title: 'Chi (\\chi)', mode: 'cmd' },
-      { display: 'ψ', value: '\\psi', title: 'Psi (\\psi)', mode: 'cmd' },
-      { display: 'ω', value: '\\omega', title: 'Omega (\\omega)', mode: 'cmd' },
-      { display: 'ϝ', value: '\\digamma', title: 'Digamma (\\digamma)', mode: 'cmd' },
-      { display: 'Γ', value: '\\Gamma', title: 'Gamma (upper) (\\Gamma)', mode: 'cmd' },
-      { display: 'Δ', value: '\\Delta', title: 'Delta (upper) (\\Delta)', mode: 'cmd' },
-      { display: 'Θ', value: '\\Theta', title: 'Theta (upper) (\\Theta)', mode: 'cmd' },
-      { display: 'Λ', value: '\\Lambda', title: 'Lambda (upper) (\\Lambda)', mode: 'cmd' },
-      { display: 'Ξ', value: '\\Xi', title: 'Xi (upper) (\\Xi)', mode: 'cmd' },
-      { display: 'Π', value: '\\Pi', title: 'Pi (upper) (\\Pi)', mode: 'cmd' },
-      { display: 'Σ', value: '\\Sigma', title: 'Sigma (upper) (\\Sigma)', mode: 'cmd' },
-      { display: 'Υ', value: '\\Upsilon', title: 'Upsilon (upper) (\\Upsilon)', mode: 'cmd' },
-      { display: 'Φ', value: '\\Phi', title: 'Phi (upper) (\\Phi)', mode: 'cmd' },
-      { display: 'Ψ', value: '\\Psi', title: 'Psi (upper) (\\Psi)', mode: 'cmd' },
-      { display: 'Ω', value: '\\Omega', title: 'Omega (upper) (\\Omega)', mode: 'cmd' },
-      { display: 'ℵ', value: '\\aleph', title: 'Aleph (\\aleph)', mode: 'cmd' },
-      { display: 'ℶ', value: '\\beth', title: 'Beth (\\beth)', mode: 'cmd' },
-      { display: 'ℷ', value: '\\gimel', title: 'Gimel (\\gimel)', mode: 'cmd' },
-      { display: 'ℸ', value: '\\daleth', title: 'Daleth (\\daleth)', mode: 'cmd' },
-      { display: 'ı', value: '\\imath', title: 'Dotless i (\\imath)', mode: 'cmd' },
-      { display: 'ȷ', value: '\\jmath', title: 'Dotless j (\\jmath)', mode: 'cmd' },
-      { display: '∇', value: '\\nabla', title: 'Nabla (\\nabla)', mode: 'cmd' },
-      { display: '∂', value: '\\partial', title: 'Partial derivative (\\partial)', mode: 'cmd' },
-      { display: 'ℑ', value: '\\Im', title: 'Imaginary part (\\Im)', mode: 'cmd' },
-      { display: 'ℑ', value: '\\image', title: 'Imaginary part (\\image)', mode: 'cmd' },
-      { display: 'ℜ', value: '\\Re', title: 'Real part (\\Re)', mode: 'cmd' },
-      { display: 'ℜ', value: '\\real', title: 'Real part (\\real)', mode: 'cmd' },
-      { display: 'ℝ', value: '\\Reals', title: 'Real numbers (\\Reals)', mode: 'cmd' },
-      { display: 'ℝ', value: '\\R', title: 'Real numbers (\\R)', mode: 'cmd' },
-      { display: 'ℝ', value: '\\reals', title: 'Real numbers (\\reals)', mode: 'cmd' },
-      { display: 'ℕ', value: '\\N', title: 'Natural numbers (\\N)', mode: 'cmd' },
-      { display: 'ℕ', value: '\\natnums', title: 'Natural numbers (\\natnums)', mode: 'cmd' },
-      { display: 'ℤ', value: '\\Z', title: 'Integers (\\Z)', mode: 'cmd' },
-      { display: 'ℂ', value: '\\cnums', title: 'Complex numbers (\\cnums)', mode: 'cmd' },
-      { display: 'ℂ', value: '\\Complex', title: 'Complex numbers (\\Complex)', mode: 'cmd' },
-      { display: '𝕜', value: '\\Bbbk', title: 'Blackboard bold k (\\Bbbk)', mode: 'cmd' },
-      { display: 'ℓ', value: '\\ell', title: 'Script ell (\\ell)', mode: 'cmd' },
-      { display: 'ℏ', value: '\\hbar', title: 'h-bar (\\hbar)', mode: 'cmd' },
-      { display: 'ℏ', value: '\\hslash', title: 'h-slash (\\hslash)', mode: 'cmd' },
-      { display: '℘', value: '\\wp', title: 'Weierstrass p (\\wp)', mode: 'cmd' },
-      { display: '℘', value: '\\weierp', title: 'Weierstrass p (\\weierp)', mode: 'cmd' },
-      { display: '⅁', value: '\\Game', title: 'Game (\\Game)', mode: 'cmd' },
-      { display: 'Ⅎ', value: '\\Finv', title: 'Turned F (\\Finv)', mode: 'cmd' },
-      { display: 'ð', value: '\\eth', title: 'Eth (\\eth)', mode: 'cmd' },
-      { display: 'Œ', value: '\\OE', title: 'OE ligature (\\OE)', mode: 'cmd' },
-      { display: 'ø', value: '\\o', title: 'o slash (\\o)', mode: 'cmd' },
-      { display: 'Ø', value: '\\O', title: 'O slash (\\O)', mode: 'cmd' },
-      { display: 'ß', value: '\\ss', title: 'Eszett (\\ss)', mode: 'cmd' },
-      { display: 'å', value: '\\aa', title: 'a ring (\\aa)', mode: 'cmd' },
-      { display: 'Å', value: '\\AA', title: 'A ring (\\AA)', mode: 'cmd' },
-      { display: 'ı', value: '\\i', title: 'Dotless i (\\i)', mode: 'cmd' },
-      { display: 'ȷ', value: '\\j', title: 'Dotless j (\\j)', mode: 'cmd' },
-      { display: 'æ', value: '\\ae', title: 'ae ligature (\\ae)', mode: 'cmd' },
-      { display: 'Æ', value: '\\AE', title: 'AE ligature (\\AE)', mode: 'cmd' },
-      { display: 'œ', value: '\\oe', title: 'oe ligature (\\oe)', mode: 'cmd' },
-      { display: 'ℵ', value: '\\alef', title: 'Aleph (\\alef)', mode: 'cmd' },
-      { display: 'ℵ', value: '\\alefsym', title: 'Aleph (\\alefsym)', mode: 'cmd' },
+      { display: commandDisplay('\\xi'), value: '\\xi', title: 'Xi (\\xi)', mode: 'cmd' },
+      { display: commandDisplay('\\pi'), value: '\\pi', title: 'Pi (\\pi)', mode: 'cmd' },
+      { display: commandDisplay('\\varpi'), value: '\\varpi', title: 'Variant pi (\\varpi)', mode: 'cmd' },
+      { display: commandDisplay('\\rho'), value: '\\rho', title: 'Rho (\\rho)', mode: 'cmd' },
+      { display: commandDisplay('\\varrho'), value: '\\varrho', title: 'Variant rho (\\varrho)', mode: 'cmd' },
+      { display: commandDisplay('\\sigma'), value: '\\sigma', title: 'Sigma (\\sigma)', mode: 'cmd' },
+      { display: commandDisplay('\\varsigma'), value: '\\varsigma', title: 'Final sigma (\\varsigma)', mode: 'cmd' },
+      { display: commandDisplay('\\tau'), value: '\\tau', title: 'Tau (\\tau)', mode: 'cmd' },
+      { display: commandDisplay('\\upsilon'), value: '\\upsilon', title: 'Upsilon (\\upsilon)', mode: 'cmd' },
+      { display: commandDisplay('\\phi'), value: '\\phi', title: 'Phi (\\phi)', mode: 'cmd' },
+      { display: commandDisplay('\\varphi'), value: '\\varphi', title: 'Variant phi (\\varphi)', mode: 'cmd' },
+      { display: commandDisplay('\\chi'), value: '\\chi', title: 'Chi (\\chi)', mode: 'cmd' },
+      { display: commandDisplay('\\psi'), value: '\\psi', title: 'Psi (\\psi)', mode: 'cmd' },
+      { display: commandDisplay('\\omega'), value: '\\omega', title: 'Omega (\\omega)', mode: 'cmd' },
+      { display: commandDisplay('\\digamma'), value: '\\digamma', title: 'Digamma (\\digamma)', mode: 'cmd' },
+      { display: commandDisplay('\\Gamma'), value: '\\Gamma', title: 'Gamma (upper) (\\Gamma)', mode: 'cmd' },
+      { display: commandDisplay('\\Delta'), value: '\\Delta', title: 'Delta (upper) (\\Delta)', mode: 'cmd' },
+      { display: commandDisplay('\\Theta'), value: '\\Theta', title: 'Theta (upper) (\\Theta)', mode: 'cmd' },
+      { display: commandDisplay('\\Lambda'), value: '\\Lambda', title: 'Lambda (upper) (\\Lambda)', mode: 'cmd' },
+      { display: commandDisplay('\\Xi'), value: '\\Xi', title: 'Xi (upper) (\\Xi)', mode: 'cmd' },
+      { display: commandDisplay('\\Pi'), value: '\\Pi', title: 'Pi (upper) (\\Pi)', mode: 'cmd' },
+      { display: commandDisplay('\\Sigma'), value: '\\Sigma', title: 'Sigma (upper) (\\Sigma)', mode: 'cmd' },
+      { display: commandDisplay('\\Upsilon'), value: '\\Upsilon', title: 'Upsilon (upper) (\\Upsilon)', mode: 'cmd' },
+      { display: commandDisplay('\\Phi'), value: '\\Phi', title: 'Phi (upper) (\\Phi)', mode: 'cmd' },
+      { display: commandDisplay('\\Psi'), value: '\\Psi', title: 'Psi (upper) (\\Psi)', mode: 'cmd' },
+      { display: commandDisplay('\\Omega'), value: '\\Omega', title: 'Omega (upper) (\\Omega)', mode: 'cmd' },
+      { display: commandDisplay('\\aleph'), value: '\\aleph', title: 'Aleph (\\aleph)', mode: 'cmd' },
+      { display: commandDisplay('\\beth'), value: '\\beth', title: 'Beth (\\beth)', mode: 'cmd' },
+      { display: commandDisplay('\\gimel'), value: '\\gimel', title: 'Gimel (\\gimel)', mode: 'cmd' },
+      { display: commandDisplay('\\daleth'), value: '\\daleth', title: 'Daleth (\\daleth)', mode: 'cmd' },
+      { display: commandDisplay('\\imath'), value: '\\imath', title: 'Dotless i (\\imath)', mode: 'cmd' },
+      { display: commandDisplay('\\jmath'), value: '\\jmath', title: 'Dotless j (\\jmath)', mode: 'cmd' },
+      { display: commandDisplay('\\nabla'), value: '\\nabla', title: 'Nabla (\\nabla)', mode: 'cmd' },
+      { display: commandDisplay('\\partial'), value: '\\partial', title: 'Partial derivative (\\partial)', mode: 'cmd' },
+      { display: commandDisplay('\\Im'), value: '\\Im', title: 'Imaginary part (\\Im)', mode: 'cmd' },
+      { display: commandDisplay('\\image'), value: '\\image', title: 'Imaginary part (\\image)', mode: 'cmd' },
+      { display: commandDisplay('\\Re'), value: '\\Re', title: 'Real part (\\Re)', mode: 'cmd' },
+      { display: commandDisplay('\\real'), value: '\\real', title: 'Real part (\\real)', mode: 'cmd' },
+      { display: commandDisplay('\\Reals'), value: '\\Reals', title: 'Real numbers (\\Reals)', mode: 'cmd' },
+      { display: commandDisplay('\\R'), value: '\\R', title: 'Real numbers (\\R)', mode: 'cmd' },
+      { display: commandDisplay('\\reals'), value: '\\reals', title: 'Real numbers (\\reals)', mode: 'cmd' },
+      { display: commandDisplay('\\N'), value: '\\N', title: 'Natural numbers (\\N)', mode: 'cmd' },
+      { display: commandDisplay('\\natnums'), value: '\\natnums', title: 'Natural numbers (\\natnums)', mode: 'cmd' },
+      { display: commandDisplay('\\Z'), value: '\\Z', title: 'Integers (\\Z)', mode: 'cmd' },
+      { display: commandDisplay('\\cnums'), value: '\\cnums', title: 'Complex numbers (\\cnums)', mode: 'cmd' },
+      { display: commandDisplay('\\Complex'), value: '\\Complex', title: 'Complex numbers (\\Complex)', mode: 'cmd' },
+      { display: commandDisplay('\\Bbbk'), value: '\\Bbbk', title: 'Blackboard bold k (\\Bbbk)', mode: 'cmd' },
+      { display: commandDisplay('\\ell'), value: '\\ell', title: 'Script ell (\\ell)', mode: 'cmd' },
+      { display: commandDisplay('\\hbar'), value: '\\hbar', title: 'h-bar (\\hbar)', mode: 'cmd' },
+      { display: commandDisplay('\\hslash'), value: '\\hslash', title: 'h-slash (\\hslash)', mode: 'cmd' },
+      { display: commandDisplay('\\wp'), value: '\\wp', title: 'Weierstrass p (\\wp)', mode: 'cmd' },
+      { display: commandDisplay('\\weierp'), value: '\\weierp', title: 'Weierstrass p (\\weierp)', mode: 'cmd' },
+      { display: commandDisplay('\\Game'), value: '\\Game', title: 'Game (\\Game)', mode: 'cmd' },
+      { display: commandDisplay('\\Finv'), value: '\\Finv', title: 'Turned F (\\Finv)', mode: 'cmd' },
+      { display: commandDisplay('\\eth'), value: '\\eth', title: 'Eth (\\eth)', mode: 'cmd' },
+      { display: commandDisplay('\\OE'), value: '\\OE', title: 'OE ligature (\\OE)', mode: 'cmd' },
+      { display: commandDisplay('\\o'), value: '\\o', title: 'o slash (\\o)', mode: 'cmd' },
+      { display: commandDisplay('\\O'), value: '\\O', title: 'O slash (\\O)', mode: 'cmd' },
+      { display: commandDisplay('\\ss'), value: '\\ss', title: 'Eszett (\\ss)', mode: 'cmd' },
+      { display: commandDisplay('\\aa'), value: '\\aa', title: 'a ring (\\aa)', mode: 'cmd' },
+      { display: commandDisplay('\\AA'), value: '\\AA', title: 'A ring (\\AA)', mode: 'cmd' },
+      { display: commandDisplay('\\i'), value: '\\i', title: 'Dotless i (\\i)', mode: 'cmd' },
+      { display: commandDisplay('\\j'), value: '\\j', title: 'Dotless j (\\j)', mode: 'cmd' },
+      { display: commandDisplay('\\ae'), value: '\\ae', title: 'ae ligature (\\ae)', mode: 'cmd' },
+      { display: commandDisplay('\\AE'), value: '\\AE', title: 'AE ligature (\\AE)', mode: 'cmd' },
+      { display: commandDisplay('\\oe'), value: '\\oe', title: 'oe ligature (\\oe)', mode: 'cmd' },
+      { display: commandDisplay('\\alef'), value: '\\alef', title: 'Aleph (\\alef)', mode: 'cmd' },
+      { display: commandDisplay('\\alefsym'), value: '\\alefsym', title: 'Aleph (\\alefsym)', mode: 'cmd' },
       ...commandItems(GREEK_ALIAS_VALUES),
     ],
   },
   {
     label: 'Calculus',
     items: [
-      { display: '∂', value: '\\partial', title: 'Partial derivative', mode: 'cmd' },
-      { display: '∇', value: '\\nabla', title: 'Nabla / Del', mode: 'cmd' },
-      { display: '∞', value: '\\infty', title: 'Infinity', mode: 'cmd' },
+      { display: commandDisplay('\\partial'), value: '\\partial', title: 'Partial derivative', mode: 'cmd' },
+      { display: commandDisplay('\\nabla'), value: '\\nabla', title: 'Nabla / Del', mode: 'cmd' },
+      { display: commandDisplay('\\infty'), value: '\\infty', title: 'Infinity', mode: 'cmd' },
       { display: 'dy/dx', value: '\\frac{dy}{dx}', title: 'Derivative', mode: 'write' },
-      { display: '∫ₐᵇ', value: '\\int_{ }^{ }', title: 'Definite integral — type the bounds', mode: 'write' },
+      { display: commandDisplay('\\int_{ }^{ }'), value: '\\int_{ }^{ }', title: 'Definite integral — type the bounds', mode: 'write' },
     ],
   },
   {
     label: 'Sets & Logic',
     items: [
-      { display: '∈', value: '\\in', title: 'Element of', mode: 'cmd' },
-      { display: '∉', value: '\\notin', title: 'Not element of', mode: 'cmd' },
-      { display: '∅', value: '\\emptyset', title: 'Empty set', mode: 'cmd' },
-      { display: '⊂', value: '\\subset', title: 'Subset', mode: 'cmd' },
-      { display: '⊆', value: '\\subseteq', title: 'Subset or equal', mode: 'cmd' },
-      { display: '⊃', value: '\\supset', title: 'Superset', mode: 'cmd' },
-      { display: '∪', value: '\\cup', title: 'Union', mode: 'cmd' },
-      { display: '∩', value: '\\cap', title: 'Intersection', mode: 'cmd' },
-      { display: '∀', value: '\\forall', title: 'For all', mode: 'cmd' },
-      { display: '∃', value: '\\exists', title: 'There exists', mode: 'cmd' },
-      { display: '¬', value: '\\neg', title: 'Logical not', mode: 'cmd' },
-      { display: '∧', value: '\\wedge', title: 'Logical and', mode: 'cmd' },
-      { display: '∨', value: '\\vee', title: 'Logical or', mode: 'cmd' },
+      { display: commandDisplay('\\in'), value: '\\in', title: 'Element of', mode: 'cmd' },
+      { display: commandDisplay('\\notin'), value: '\\notin', title: 'Not element of', mode: 'cmd' },
+      { display: commandDisplay('\\emptyset'), value: '\\emptyset', title: 'Empty set', mode: 'cmd' },
+      { display: commandDisplay('\\subset'), value: '\\subset', title: 'Subset', mode: 'cmd' },
+      { display: commandDisplay('\\subseteq'), value: '\\subseteq', title: 'Subset or equal', mode: 'cmd' },
+      { display: commandDisplay('\\supset'), value: '\\supset', title: 'Superset', mode: 'cmd' },
+      { display: commandDisplay('\\cup'), value: '\\cup', title: 'Union', mode: 'cmd' },
+      { display: commandDisplay('\\cap'), value: '\\cap', title: 'Intersection', mode: 'cmd' },
+      { display: commandDisplay('\\forall'), value: '\\forall', title: 'For all', mode: 'cmd' },
+      { display: commandDisplay('\\exists'), value: '\\exists', title: 'There exists', mode: 'cmd' },
+      { display: commandDisplay('\\neg'), value: '\\neg', title: 'Logical not', mode: 'cmd' },
+      { display: commandDisplay('\\wedge'), value: '\\wedge', title: 'Logical and', mode: 'cmd' },
+      { display: commandDisplay('\\vee'), value: '\\vee', title: 'Logical or', mode: 'cmd' },
     ],
   },
   {
     label: 'Arrows',
     items: [
-      { display: '→', value: '\\rightarrow', title: 'Right arrow', mode: 'cmd' },
-      { display: '←', value: '\\leftarrow', title: 'Left arrow', mode: 'cmd' },
-      { display: '↔', value: '\\leftrightarrow', title: 'Both arrows', mode: 'cmd' },
-      { display: '⇒', value: '\\Rightarrow', title: 'Implies', mode: 'cmd' },
-      { display: '⇐', value: '\\Leftarrow', title: 'Implied by', mode: 'cmd' },
-      { display: '⇔', value: '\\Leftrightarrow', title: 'If and only if', mode: 'cmd' },
-      { display: '↦', value: '\\mapsto', title: 'Maps to', mode: 'cmd' },
+      ...ARROWS_COMMON_ITEMS,
+      ...ARROWS_MORE_ITEMS,
+      ...ARROWS_EXTENSIBLE_ITEMS,
     ],
   },
   {
@@ -317,350 +817,123 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
     ],
   },
   {
-    label: 'Environments',
-    items: templateItems([
-      ['array', '\\begin{array}{#?}#?\\end{array}', 'Array environment'],
-      ['cases', '\\begin{cases}#?\\end{cases}', 'Cases environment'],
-      ['rcases', '\\begin{rcases}#?\\end{rcases}', 'Right cases environment'],
-      ['smallmatrix', '\\begin{smallmatrix}#?\\end{smallmatrix}', 'Small matrix environment'],
-      ['subarray', '\\begin{subarray}{#?}#?\\end{subarray}', 'Subarray environment'],
-      ['equation', '\\begin{equation}#?\\end{equation}', 'Equation environment'],
-      ['equation*', '\\begin{equation*}#?\\end{equation*}', 'Equation* environment'],
-      ['split', '\\begin{split}#?\\end{split}', 'Split environment'],
-      ['align', '\\begin{align}#?\\end{align}', 'Align environment'],
-      ['align*', '\\begin{align*}#?\\end{align*}', 'Align* environment'],
-      ['aligned', '\\begin{aligned}#?\\end{aligned}', 'Aligned environment'],
-      ['alignat', '\\begin{alignat}{#?}#?\\end{alignat}', 'Alignat environment'],
-      ['alignat*', '\\begin{alignat*}{#?}#?\\end{alignat*}', 'Alignat* environment'],
-      ['alignedat', '\\begin{alignedat}{#?}#?\\end{alignedat}', 'Alignedat environment'],
-      ['gather', '\\begin{gather}#?\\end{gather}', 'Gather environment'],
-      ['gather*', '\\begin{gather*}#?\\end{gather*}', 'Gather* environment'],
-      ['gathered', '\\begin{gathered}#?\\end{gathered}', 'Gathered environment'],
-      ['CD', '\\begin{CD}#?\\end{CD}', 'Commutative diagram environment'],
-      ['darray', '\\begin{darray}{#?}#?\\end{darray}', 'Display array environment'],
-      ['dcases', '\\begin{dcases}#?\\end{dcases}', 'Display cases environment'],
-      ['drcases', '\\begin{drcases}#?\\end{drcases}', 'Display right cases environment'],
-      ['matrix*', '\\begin{matrix*}[#?]#?\\end{matrix*}', 'Aligned matrix* environment'],
-      ['pmatrix*', '\\begin{pmatrix*}[#?]#?\\end{pmatrix*}', 'Aligned pmatrix* environment'],
-      ['bmatrix*', '\\begin{bmatrix*}[#?]#?\\end{bmatrix*}', 'Aligned bmatrix* environment'],
-      ['Bmatrix*', '\\begin{Bmatrix*}[#?]#?\\end{Bmatrix*}', 'Aligned Bmatrix* environment'],
-      ['vmatrix*', '\\begin{vmatrix*}[#?]#?\\end{vmatrix*}', 'Aligned vmatrix* environment'],
-      ['Vmatrix*', '\\begin{Vmatrix*}[#?]#?\\end{Vmatrix*}', 'Aligned Vmatrix* environment'],
-    ]),
-  },
-  {
     label: 'Accents',
-    items: templateItems([
-      ['tilde', '\\tilde{#?}'],
-      ['widetilde', '\\widetilde{#?}'],
-      ['utilde', '\\utilde{#?}'],
-      ['acute', '\\acute{#?}'],
-      ['bar', '\\bar{#?}'],
-      ['breve', '\\breve{#?}'],
-      ['check', '\\check{#?}'],
-      ['dot', '\\dot{#?}'],
-      ['ddot', '\\ddot{#?}'],
-      ['dddot', '\\dddot{#?}'],
-      ['ddddot', '\\ddddot{#?}'],
-      ['grave', '\\grave{#?}'],
-      ['hat', '\\hat{#?}'],
-      ['widehat', '\\widehat{#?}'],
-      ['widecheck', '\\widecheck{#?}'],
-      ['mathring', '\\mathring{#?}'],
-      ['vec', '\\vec{#?}'],
-      ['overline', '\\overline{#?}'],
-      ['underline', '\\underline{#?}'],
-      ['underbar', '\\underbar{#?}'],
-      ['overbrace', '\\overbrace{#?}^{#?}'],
-      ['underbrace', '\\underbrace{#?}_{#?}'],
-      ['overbracket', '\\overbracket{#?}^{#?}'],
-      ['underbracket', '\\underbracket{#?}_{#?}'],
-      ['overgroup', '\\overgroup{#?}'],
-      ['undergroup', '\\undergroup{#?}'],
-      ['overleftarrow', '\\overleftarrow{#?}'],
-      ['overrightarrow', '\\overrightarrow{#?}'],
-      ['Overrightarrow', '\\Overrightarrow{#?}'],
-      ['underleftarrow', '\\underleftarrow{#?}'],
-      ['underrightarrow', '\\underrightarrow{#?}'],
-      ['overleftrightarrow', '\\overleftrightarrow{#?}'],
-      ['underleftrightarrow', '\\underleftrightarrow{#?}'],
-      ['overleftharpoon', '\\overleftharpoon{#?}'],
-      ['overrightharpoon', '\\overrightharpoon{#?}'],
-      ['overlinesegment', '\\overlinesegment{#?}'],
-      ['underlinesegment', '\\underlinesegment{#?}'],
-      ["\\'", "\\'{#?}", "Text acute accent (\\')"],
-      ['\\`', '\\`{#?}', 'Text grave accent (\\`)'],
-      ['\\^', '\\^{#?}', 'Text circumflex accent (\\^)'],
-      ['\\~', '\\~{#?}', 'Text tilde accent (\\~)'],
-      ['\\=', '\\={#?}', 'Text macron accent (\\=)'],
-      ['\\u', '\\u{#?}', 'Text breve accent (\\u)'],
-      ['\\.', '\\.{#?}', 'Text dot accent (\\.)'],
-      ['\\"', '\\"{#?}', 'Text umlaut accent (\\")'],
-      ['\\r', '\\r{#?}', 'Text ring accent (\\r)'],
-      ['\\H', '\\H{#?}', 'Text double acute accent (\\H)'],
-      ['\\v', '\\v{#?}', 'Text caron accent (\\v)'],
-    ]),
+    items: [
+      { display: 'tilde', value: '\\tilde{ }', title: 'Tilde (\\tilde)', mode: 'write' },
+      { display: 'widetilde', value: '\\widetilde{ }', title: 'Wide tilde (\\widetilde)', mode: 'write' },
+      { display: 'acute', value: '\\acute{ }', title: 'Acute accent (\\acute)', mode: 'write' },
+      { display: 'bar', value: '\\bar{ }', title: 'Bar / macron (\\bar)', mode: 'write' },
+      { display: 'breve', value: '\\breve{ }', title: 'Breve (\\breve)', mode: 'write' },
+      { display: 'check', value: '\\check{ }', title: 'Check / caron (\\check)', mode: 'write' },
+      { display: 'dot', value: '\\dot{ }', title: 'Dot above (\\dot)', mode: 'write' },
+      { display: 'ddot', value: '\\ddot{ }', title: 'Double dot / umlaut (\\ddot)', mode: 'write' },
+      { display: 'dddot', value: '\\dddot{ }', title: 'Triple dot (\\dddot)', mode: 'write' },
+      { display: 'ddddot', value: '\\ddddot{ }', title: 'Quadruple dot (\\ddddot)', mode: 'write' },
+      { display: 'grave', value: '\\grave{ }', title: 'Grave accent (\\grave)', mode: 'write' },
+      { display: 'hat', value: '\\hat{ }', title: 'Hat / circumflex (\\hat)', mode: 'write' },
+      { display: 'widehat', value: '\\widehat{ }', title: 'Wide hat (\\widehat)', mode: 'write' },
+      { display: 'mathring', value: '\\mathring{ }', title: 'Ring above (\\mathring)', mode: 'write' },
+      { display: 'vec', value: '\\vec{ }', title: 'Vector arrow (\\vec)', mode: 'write' },
+      { display: 'overline', value: '\\overline{ }', title: 'Overline (\\overline)', mode: 'write' },
+      { display: 'underline', value: '\\underline{ }', title: 'Underline (\\underline)', mode: 'write' },
+      { display: 'underbar', value: '\\underbar{ }', title: 'Underbar (\\underbar)', mode: 'write' },
+      { display: 'overbrace', value: '\\overbrace{ }^{ }', title: 'Overbrace with label (\\overbrace)', mode: 'write' },
+      { display: 'underbrace', value: '\\underbrace{ }_{ }', title: 'Underbrace with label (\\underbrace)', mode: 'write' },
+      { display: 'overleftarrow', value: '\\overleftarrow{ }', title: 'Left arrow over (\\overleftarrow)', mode: 'write' },
+      { display: 'overrightarrow', value: '\\overrightarrow{ }', title: 'Right arrow over (\\overrightarrow)', mode: 'write' },
+      { display: 'underleftarrow', value: '\\underleftarrow{ }', title: 'Left arrow under (\\underleftarrow)', mode: 'write' },
+      { display: 'underrightarrow', value: '\\underrightarrow{ }', title: 'Right arrow under (\\underrightarrow)', mode: 'write' },
+      { display: 'overleftrightarrow', value: '\\overleftrightarrow{ }', title: 'Bidirectional arrow over (\\overleftrightarrow)', mode: 'write' },
+      { display: 'underleftrightarrow', value: '\\underleftrightarrow{ }', title: 'Bidirectional arrow under (\\underleftrightarrow)', mode: 'write' },
+      { display: 'overleftharpoon', value: '\\overleftharpoon{ }', title: 'Left harpoon over (\\overleftharpoon)', mode: 'write' },
+      { display: 'overrightharpoon', value: '\\overrightharpoon{ }', title: 'Right harpoon over (\\overrightharpoon)', mode: 'write' },
+      latexSlotItem(<CancelPreview kind="cancel" />, '\\cancel{#?}', '\\cancel'),
+      latexSlotItem(<CancelPreview kind="bcancel" />, '\\bcancel{#?}', '\\bcancel'),
+      latexSlotItem(<CancelPreview kind="xcancel" />, '\\xcancel{#?}', '\\xcancel'),
+      latexSlotItem(<CancelPreview kind="sout" />, '\\sout{#?}', '\\sout'),
+      latexSlotItem(<span className="math-phase math-phase-phase" style={{ margin: 0 }}><svg className="math-phase-angle-svg" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true" focusable="false"><polyline points="24,3 3,23 100,23" /></svg><Slot /></span>, '\\phase{#?}', '\\phase'),
+      latexSlotItem(<span className="math-phase math-phase-angln" style={{ margin: 0 }}><Slot /></span>, '\\angln{#?}', '\\angln'),
+      { display: "acute'", value: "\\'{ }", title: "Acute accent (\\')", mode: "write" },
+      { display: 'grave`', value: '\\`{ }', title: 'Grave accent (\\`)', mode: 'write' },
+      { display: 'hat^', value: '\\^{ }', title: 'Circumflex / hat (\\^)', mode: 'write' },
+      { display: 'tilde~', value: '\\~{ }', title: 'Tilde (\\~)', mode: 'write' },
+      { display: 'macron=', value: '\\={ }', title: 'Macron / bar (\\=)', mode: 'write' },
+      { display: 'breveu', value: '\\u{ }', title: 'Breve (\\u)', mode: 'write' },
+      { display: 'dot.', value: '\\.{ }', title: 'Dot above (\\.)', mode: 'write' },
+      { display: 'ringr', value: '\\r{ }', title: 'Ring above (\\r)', mode: 'write' },
+      { display: 'doubleacuteH', value: '\\H{ }', title: 'Double acute (\\H)', mode: 'write' },
+      { display: 'caronv', value: '\\v{ }', title: 'Caron / check (\\v)', mode: 'write' },
+      { display: 'umlaut"', value: '\\"{ }', title: 'Umlaut / double dot (\\")', mode: 'write' },
+    ],
   },
   {
     label: 'Delimiters',
     items: [
       ...commandItems([
-        '\\lparen', '\\rparen', '\\lbrack', '\\rbrack', '\\lbrace', '\\rbrace', '\\langle', '\\rangle',
-        '\\lang', '\\rang', '\\lt', '\\gt', '\\vert', '\\Vert', '\\lvert', '\\rvert', '\\lVert', '\\rVert',
-        '\\lceil', '\\rceil', '\\lfloor', '\\rfloor', '\\lmoustache', '\\rmoustache', '\\lgroup', '\\rgroup',
-        '\\ulcorner', '\\urcorner', '\\llcorner', '\\lrcorner', '\\llbracket', '\\rrbracket', '\\lBrace',
-        '\\rBrace', '\\backslash', '\\uparrow', '\\downarrow', '\\updownarrow', '\\Uparrow', '\\Downarrow',
-        '\\Updownarrow', '\\left', '\\middle', '\\right', '\\big', '\\Big', '\\bigg', '\\Bigg', '\\bigl',
-        '\\Bigl', '\\biggl', '\\Biggl', '\\bigm', '\\Bigm', '\\biggm', '\\Biggm', '\\bigr', '\\Bigr',
-        '\\biggr', '\\Biggr',
+        '\\backslash',
       ]),
     ],
   },
   {
-    label: 'Big Operators',
-    items: commandItems([
-      '\\sum', '\\prod', '\\coprod', '\\int', '\\intop', '\\smallint', '\\iint', '\\iiint', '\\oint',
-      '\\oiint', '\\oiiint', '\\bigotimes', '\\bigoplus', '\\bigodot', '\\biguplus', '\\bigsqcup',
-      '\\bigvee', '\\bigwedge', '\\bigcap', '\\bigcup',
-    ]),
-  },
-  {
-    label: 'More Operators',
+    label: 'Operators',
     items: [
-      ...commandItems([
-        '*', '/', '\\pm', '\\plusmn', '\\mp', '\\cdotp', '\\centerdot', '\\circ', '\\circledast',
-        '\\circledcirc', '\\circleddash', '\\Cup', '\\Cap', '\\doublecap', '\\doublecup', '\\curlyvee',
-        '\\curlywedge', '\\divideontimes', '\\dotplus', '\\doublebarwedge', '\\gtrdot', '\\intercal',
-        '\\leftthreetimes', '\\rightthreetimes', '\\ldotp', '\\rtimes', '\\ltimes', '\\setminus',
-        '\\smallsetminus', '\\lessdot', '\\lhd', '\\rhd', '\\unlhd', '\\unrhd', '\\amalg', '\\And',
-        '\\ast', '\\barwedge', '\\bigcirc', '\\boxdot', '\\boxminus', '\\boxplus', '\\boxtimes',
-        '\\bullet', '\\bmod', '\\mod', '\\pmod', '\\pod', '\\land', '\\lor', '\\odot', '\\ominus',
-        '\\oplus', '\\oslash', '\\otimes', '\\sqcap', '\\sqcup', '\\uplus', '\\veebar', '\\wr',
-      ]),
+      ...OPERATORS_COMMON_ITEMS,
+      ...OPERATORS_MISC_ITEMS,
     ],
   },
   {
     label: 'Fractions',
     items: [
-      ...templateItems([
-        ['tfrac', '\\tfrac{#?}{#?}'],
-        ['dfrac', '\\dfrac{#?}{#?}'],
-        ['cfrac', '\\cfrac{#?}{#?}'],
-        ['binom', '\\binom{#?}{#?}'],
-        ['dbinom', '\\dbinom{#?}{#?}'],
-        ['tbinom', '\\tbinom{#?}{#?}'],
-        ['genfrac', '\\genfrac{#?}{#?}{#?}{#?}{#?}{#?}'],
-        ['over', '{#? \\over #?}'],
-        ['above', '{#? \\above{#?} #?}'],
-        ['choose', '{#? \\choose #?}'],
-        ['brace', '{#? \\brace #?}'],
-        ['brack', '{#? \\brack #?}'],
-      ]),
+      latexSlotItem(<FractionDisplay />, '\\frac{#?}{#?}', '\\frac'),
+      latexSlotItem(<span style={{ fontSize: '0.85em' }}><FractionDisplay /></span>, '\\tfrac{#?}{#?}', '\\tfrac'),
+      latexSlotItem(<span style={{ fontSize: '1.15em' }}><FractionDisplay /></span>, '\\dfrac{#?}{#?}', '\\dfrac'),
+      latexSlotItem(<div style={{ display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle', fontSize: '0.8em', lineHeight: 1 }}><span style={{ fontSize: '1.5em', fontWeight: 300, marginRight: '2px' }}>(</span><div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}><Slot /><Slot /></div><span style={{ fontSize: '1.5em', fontWeight: 300, marginLeft: '2px' }}>)</span></div>, '\\binom{#?}{#?}', '\\binom'),
     ],
-  },
-  {
-    label: 'More Relations',
-    items: commandItems([
-      '<', '>', ':', '\\leq', '\\geq', '\\neq', '\\lt', '\\gt', '\\doteqdot', '\\eqcirc', '\\eqcolon',
-      '\\minuscolon', '\\Eqcolon', '\\minuscoloncolon', '\\eqqcolon', '\\equalscolon', '\\Eqqcolon',
-      '\\equalscoloncolon', '\\approxcolon', '\\approxcoloncolon', '\\approxeq', '\\asymp', '\\backepsilon',
-      '\\backsim', '\\backsimeq', '\\between', '\\bowtie', '\\bumpeq', '\\Bumpeq', '\\circeq',
-      '\\colonapprox', '\\Colonapprox', '\\coloncolonapprox', '\\coloneq', '\\colonminus', '\\Coloneq',
-      '\\coloncolonminus', '\\coloneqq', '\\colonequals', '\\Coloneqq', '\\coloncolonequals',
-      '\\colonsim', '\\Colonsim', '\\coloncolonsim', '\\cong', '\\curlyeqprec', '\\curlyeqsucc',
-      '\\dashv', '\\dblcolon', '\\coloncolon', '\\doteq', '\\Doteq', '\\eqsim', '\\eqslantgtr',
-      '\\eqslantless', '\\equiv', '\\fallingdotseq', '\\frown', '\\geqq', '\\geqslant', '\\gg',
-      '\\ggg', '\\gggtr', '\\gtrapprox', '\\gtreqless', '\\gtreqqless', '\\gtrless', '\\gtrsim',
-      '\\imageof', '\\Join', '\\leqq', '\\leqslant', '\\lessapprox', '\\lesseqgtr', '\\lesseqqgtr',
-      '\\lessgtr', '\\lesssim', '\\ll', '\\lll', '\\llless', '\\models', '\\multimap', '\\origof',
-      '\\owns', '\\parallel', '\\perp', '\\pitchfork', '\\prec', '\\precapprox', '\\preccurlyeq',
-      '\\preceq', '\\precsim', '\\risingdotseq', '\\shortmid', '\\shortparallel', '\\sim', '\\simeq',
-      '\\smallfrown', '\\smallsmile', '\\smile', '\\sqsubset', '\\sqsubseteq', '\\sqsupset',
-      '\\sqsupseteq', '\\sub', '\\sube', '\\Subset', '\\subseteqq', '\\succ', '\\succapprox',
-      '\\succcurlyeq', '\\succeq', '\\succsim', '\\supe', '\\Supset', '\\supseteqq', '\\thickapprox',
-      '\\thicksim', '\\trianglelefteq', '\\triangleq', '\\trianglerighteq', '\\varpropto',
-      '\\vartriangle', '\\vartriangleleft', '\\vartriangleright', '\\vcentcolon', '\\ratio',
-      '\\vdash', '\\vDash', '\\Vdash', '\\Vvdash',
-    ]),
-  },
-  {
-    label: 'Negated Relations',
-    items: commandItems([
-      '\\not', '\\gnapprox', '\\gneq', '\\gneqq', '\\gnsim', '\\gvertneqq', '\\lnapprox', '\\lneq',
-      '\\lneqq', '\\lnsim', '\\lvertneqq', '\\ncong', '\\ne', '\\neq', '\\ngeq', '\\ngeqq',
-      '\\ngeqslant', '\\ngtr', '\\nleq', '\\nleqq', '\\nleqslant', '\\nless', '\\nmid',
-      '\\notin', '\\notni', '\\nparallel', '\\nprec', '\\npreceq', '\\nshortmid',
-      '\\nshortparallel', '\\nsim', '\\nsubseteq', '\\nsubseteqq', '\\nsucc', '\\nsucceq',
-      '\\nsupseteq', '\\nsupseteqq', '\\ntriangleleft', '\\ntrianglelefteq', '\\ntriangleright',
-      '\\ntrianglerighteq', '\\nvdash', '\\nvDash', '\\nVDash', '\\nVdash', '\\precnapprox',
-      '\\precneqq', '\\precnsim', '\\subsetneq', '\\subsetneqq', '\\succnapprox', '\\succneqq',
-      '\\succnsim', '\\supsetneq', '\\supsetneqq', '\\varsubsetneq', '\\varsubsetneqq',
-      '\\varsupsetneq', '\\varsupsetneqq',
-    ]),
-  },
-  {
-    label: 'More Arrows',
-    items: commandItems([
-      '\\circlearrowleft', '\\circlearrowright', '\\curvearrowleft', '\\curvearrowright', '\\Darr',
-      '\\dArr', '\\darr', '\\dashleftarrow', '\\dashrightarrow', '\\downdownarrows',
-      '\\downharpoonleft', '\\downharpoonright', '\\gets', '\\Harr', '\\hArr', '\\harr',
-      '\\hookleftarrow', '\\hookrightarrow', '\\iff', '\\impliedby', '\\implies', '\\Larr',
-      '\\lArr', '\\larr', '\\leadsto', '\\Leftarrow', '\\leftarrowtail', '\\leftharpoondown',
-      '\\leftharpoonup', '\\leftleftarrows', '\\leftrightarrows', '\\leftrightharpoons',
-      '\\leftrightsquigarrow', '\\Lleftarrow', '\\longleftarrow', '\\Longleftarrow',
-      '\\longleftrightarrow', '\\Longleftrightarrow', '\\longmapsto', '\\longrightarrow',
-      '\\Longrightarrow', '\\looparrowleft', '\\looparrowright', '\\Lrarr', '\\lrArr',
-      '\\lrarr', '\\Lsh', '\\mapsto', '\\nearrow', '\\nleftarrow', '\\nLeftarrow',
-      '\\nleftrightarrow', '\\nLeftrightarrow', '\\nrightarrow', '\\nRightarrow', '\\nwarrow',
-      '\\rArr', '\\rarr', '\\restriction', '\\rightarrowtail', '\\rightharpoondown',
-      '\\rightharpoonup', '\\rightleftarrows', '\\rightleftharpoons', '\\rightrightarrows',
-      '\\rightsquigarrow', '\\Rrightarrow', '\\Rsh', '\\searrow', '\\swarrow', '\\to',
-      '\\twoheadleftarrow', '\\twoheadrightarrow', '\\Uarr', '\\uArr', '\\uarr', '\\upharpoonleft',
-      '\\upharpoonright', '\\upuparrows',
-    ]),
-  },
-  {
-    label: 'Extensible Arrows',
-    items: templateItems([
-      ['xleftarrow', '\\xleftarrow{#?}'],
-      ['xrightarrow', '\\xrightarrow[#?]{#?}'],
-      ['xLeftarrow', '\\xLeftarrow{#?}'],
-      ['xRightarrow', '\\xRightarrow{#?}'],
-      ['xleftrightarrow', '\\xleftrightarrow{#?}'],
-      ['xLeftrightarrow', '\\xLeftrightarrow{#?}'],
-      ['xhookleftarrow', '\\xhookleftarrow{#?}'],
-      ['xhookrightarrow', '\\xhookrightarrow{#?}'],
-      ['xtwoheadleftarrow', '\\xtwoheadleftarrow{#?}'],
-      ['xtwoheadrightarrow', '\\xtwoheadrightarrow{#?}'],
-      ['xleftharpoonup', '\\xleftharpoonup{#?}'],
-      ['xrightharpoonup', '\\xrightharpoonup{#?}'],
-      ['xleftharpoondown', '\\xleftharpoondown{#?}'],
-      ['xrightharpoondown', '\\xrightharpoondown{#?}'],
-      ['xleftrightharpoons', '\\xleftrightharpoons{#?}'],
-      ['xrightleftharpoons', '\\xrightleftharpoons{#?}'],
-      ['xtofrom', '\\xtofrom{#?}'],
-      ['xmapsto', '\\xmapsto{#?}'],
-      ['xlongequal', '\\xlongequal{#?}'],
-    ]),
   },
   {
     label: 'Notation',
     items: [
-      ...templateItems([
-        ['bra', '\\bra{#?}'],
-        ['ket', '\\ket{#?}'],
-        ['braket', '\\braket{#?}'],
-        ['Bra', '\\Bra{#?}'],
-        ['Ket', '\\Ket{#?}'],
-        ['Braket', '\\Braket{#?}'],
-        ['Set', '\\Set{#?}'],
-        ['set', '\\set{#?}'],
-      ]),
+      latexSlotItem(<>{'\u27e8'}<Slot />{'\u27e9'}</>, '\\left\\langle{#?}\\right\\rangle', '\\left\\langle{#?}\\right\\rangle'),
+      latexSlotItem(<>|<Slot />{'\u27e9'}</>, '\\left\\lvert{#?}\\right\\rangle', '\\left\\lvert{#?}\\right\\rangle'),
+      latexSlotItem(<>{'\u27e8'}<Slot />|</>, '\\left\\langle{#?}\\right\\rvert', '\\left\\langle{#?}\\right\\rvert'),
+      latexSlotItem(<>{'{'}<Slot />{'}'}</>, '\\left\\lbrace{#?}\\right\\rbrace', '\\left\\lbrace{#?}\\right\\rbrace'),
       ...commandItems([
-        '\\complement', '\\therefore', '\\because', '\\empty', '\\varnothing', '\\exist',
-        '\\nexists', '\\mid', '\\isin', '\\ni', '\\lnot',
+        '\\complement', '\\therefore', '\\because', '\\emptyset', '\\varnothing', '\\exists',
+        '\\nexists', '\\mid', '\\in', '\\ni', '\\lnot',
       ]),
     ],
   },
   {
     label: 'Layout',
     items: [
-      ...templateItems([
-        ['cancel', '\\cancel{#?}'],
-        ['bcancel', '\\bcancel{#?}'],
-        ['xcancel', '\\xcancel{#?}'],
-        ['sout', '\\sout{#?}'],
-        ['boxed', '\\boxed{#?}'],
-        ['phase', '\\phase{#?}'],
-        ['tag', '\\tag{#?}'],
-        ['tag*', '\\tag*{#?}'],
-        ['stackrel', '\\stackrel{#?}{#?}'],
-        ['raisebox', '\\raisebox{#?}{#?}'],
-        ['vcenter', '\\vcenter{#?}'],
-        ['hbox', '\\hbox{#?}'],
-        ['substack', '\\substack{#?}'],
-        ['mathllap', '\\mathllap{#?}'],
-        ['mathrlap', '\\mathrlap{#?}'],
-        ['mathclap', '\\mathclap{#?}'],
-        ['smash', '\\smash{#?}'],
-        ['smash[b]', '\\smash[b]{#?}'],
-        ['llap', '\\llap{#?}'],
-        ['rlap', '\\rlap{#?}'],
-        ['clap', '\\clap{#?}'],
-        ['phantom', '\\phantom{#?}'],
-        ['hphantom', '\\hphantom{#?}'],
-        ['vphantom', '\\vphantom{#?}'],
-        ['kern', '\\kern{#?}'],
-        ['mkern', '\\mkern{#?}'],
-        ['mskip', '\\mskip{#?}'],
-        ['hskip', '\\hskip{#?}'],
-        ['hspace', '\\hspace{#?}'],
-        ['hspace*', '\\hspace*{#?}'],
-      ]),
-      ...commandItems([
-        '\\\\', '\\newline', '\\allowbreak', '\\nobreak', '\\,', '\\thinspace', '\\>', '\\:',
-        '\\medspace', '\\;', '\\thickspace', '\\enspace', '\\quad', '\\qquad', '\\!', '\\negthinspace',
-        '\\negmedspace', '\\negthickspace', '\\nobreakspace', '\\space', '\\mathstrut', '~',
-      ]),
-    ],
-  },
-  {
-    label: 'Fonts & Style',
-    items: [
-      ...templateItems([
-        ['mathrm', '\\mathrm{#?}'],
-        ['mathbf', '\\mathbf{#?}'],
-        ['mathsf', '\\mathsf{#?}'],
-        ['mathnormal', '\\mathnormal{#?}'],
-        ['textbf', '\\textbf{#?}'],
-        ['textsf', '\\textsf{#?}'],
-        ['textrm', '\\textrm{#?}'],
-        ['bold', '\\bold{#?}'],
-        ['mathsfit', '\\mathsfit{#?}'],
-        ['textnormal', '\\textnormal{#?}'],
-        ['boldsymbol', '\\boldsymbol{#?}'],
-        ['Bbb', '\\Bbb{#?}'],
-        ['text', '\\text{#?}'],
-        ['bm', '\\bm{#?}'],
-        ['mathbb', '\\mathbb{#?}'],
-        ['textup', '\\textup{#?}'],
-        ['textmd', '\\textmd{#?}'],
-        ['frak', '\\frak{#?}'],
-        ['mathit', '\\mathit{#?}'],
-        ['mathtt', '\\mathtt{#?}'],
-        ['mathfrak', '\\mathfrak{#?}'],
-        ['textit', '\\textit{#?}'],
-        ['texttt', '\\texttt{#?}'],
-        ['mathcal', '\\mathcal{#?}'],
-        ['emph', '\\emph{#?}'],
-        ['mathscr', '\\mathscr{#?}'],
-        ['pmb', '\\pmb{#?}'],
-        ['mathbin', '\\mathbin{#?}'],
-        ['mathclose', '\\mathclose{#?}'],
-        ['mathinner', '\\mathinner{#?}'],
-        ['mathop', '\\mathop{#?}'],
-        ['mathopen', '\\mathopen{#?}'],
-        ['mathord', '\\mathord{#?}'],
-        ['mathpunct', '\\mathpunct{#?}'],
-        ['mathrel', '\\mathrel{#?}'],
-        ['textcolor', '\\textcolor{#?}{#?}'],
-        ['colorbox', '\\colorbox{#?}{#?}'],
-        ['fcolorbox', '\\fcolorbox{#?}{#?}{#?}'],
-        ['color', '\\color{#?}'],
-        ['verb', '\\verb|#?|'],
-      ]),
-      ...commandItems([
-        '\\bf', '\\sf', '\\rm', '\\it', '\\tt', '\\cal', '\\Huge', '\\huge', '\\LARGE', '\\Large',
-        '\\large', '\\normalsize', '\\small', '\\footnotesize', '\\scriptsize', '\\tiny',
-        '\\displaystyle', '\\textstyle', '\\scriptstyle', '\\scriptscriptstyle', '\\limits', '\\nolimits',
-      ]),
+      latexSlotItem(<div style={{ border: '1px solid currentColor', padding: '2px', display: 'inline-block', lineHeight: 1 }}><Slot /></div>, '\\boxed{#?}', '\\boxed'),
+      latexSlotItem(<div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', verticalAlign: 'middle', lineHeight: 1, gap: '2px' }}><span style={{ fontSize: '0.7em' }}><Slot /></span><Slot /></div>, '\\stackrel{#?}{#?}', '\\stackrel'),
+      latexSlotItem(<span style={{ opacity: 0.5, border: '1px dashed currentColor', padding: '1px' }}><Slot /></span>, '\\phantom{#?}', '\\phantom'),
+      latexSlotItem(<span style={{ opacity: 0.5, borderTop: '1px dashed currentColor', borderBottom: '1px dashed currentColor', padding: '1px' }}>{'\u2194'}<Slot />{'\u2194'}</span>, '\\hphantom{#?}', '\\hphantom'),
+      latexSlotItem(<span style={{ opacity: 0.5, borderLeft: '1px dashed currentColor', borderRight: '1px dashed currentColor', padding: '1px' }}>{'\u2195'}<Slot />{'\u2195'}</span>, '\\vphantom{#?}', '\\vphantom'),
+      latexSlotItem(<>{'\u2194'} <Slot /></>, '\\hspace{#?}', '\\hspace'),
+      latexSlotItem(<>{'\u2194'}* <Slot /></>, '\\hspace*{#?}', '\\hspace*'),
+      { display: <NewlineDisplay label="\\" />, value: '\\\\', title: 'Newline (\\\\)', mode: 'cmd' },
+      { display: <NewlineDisplay label="\\newline" />, value: '\\newline', title: 'Newline (\\newline)', mode: 'cmd' },
+      { display: <SpaceDisplay width={4} label="\\," />, value: '\\,', title: 'Thin space (\\,)', mode: 'cmd' },
+      { display: <SpaceDisplay width={4} label="\\thinspace" />, value: '\\thinspace', title: 'Thin space (\\thinspace)', mode: 'cmd' },
+      { display: <SpaceDisplay width={6} label="\\:" />, value: '\\:', title: 'Medium space (\\:)', mode: 'cmd' },
+      { display: <SpaceDisplay width={6} label="\\medspace" />, value: '\\medspace', title: 'Medium space (\\medspace)', mode: 'cmd' },
+      { display: <SpaceDisplay width={8} label="\\;" />, value: '\\;', title: 'Thick space (\\;)', mode: 'cmd' },
+      { display: <SpaceDisplay width={8} label="\\thickspace" />, value: '\\thickspace', title: 'Thick space (\\thickspace)', mode: 'cmd' },
+      { display: <SpaceDisplay width={12} label="\\enspace" />, value: '\\enspace', title: 'En space (\\enspace)', mode: 'cmd' },
+      { display: <SpaceDisplay width={24} label="\\quad" />, value: '\\quad', title: 'Quad space (\\quad)', mode: 'cmd' },
+      { display: <SpaceDisplay width={48} label="\\qquad" />, value: '\\qquad', title: 'Double quad space (\\qquad)', mode: 'cmd' },
+      { display: <SpaceDisplay width={4} label="\\!" isNegative />, value: '\\!', title: 'Negative thin space (\\!)', mode: 'cmd' },
+      { display: <SpaceDisplay width={4} label="\\negthinspace" isNegative />, value: '\\negthinspace', title: 'Negative thin space (\\negthinspace)', mode: 'cmd' },
+      { display: <SpaceDisplay width={6} label="~" />, value: '~', title: 'Non-breaking space (~)', mode: 'cmd' },
     ],
   },
   {
     label: 'Symbols',
     items: commandItems([
       '\\dots', '\\cdots', '\\ddots', '\\ldots', '\\vdots', '\\dotsb', '\\dotsc', '\\dotsi',
-      '\\dotsm', '\\dotso', '\\mathellipsis', '\\KaTeX', '\\LaTeX', '\\TeX', '\\%', '\\#', '\\&',
+      '\\dotsm', '\\dotso', '\\mathellipsis', '\\%', '\\#', '\\&',
       '\\_', '\\$', '\\infin', '\\checkmark', '\\dag', '\\dagger', '\\ddag', '\\ddagger', '\\Dagger',
       '\\Box', '\\square', '\\angle', '\\measuredangle', '\\sphericalangle', '\\top', '\\bot',
       '\\colon', '\\backprime', '\\prime', '\\lq', '\\rq', '\\bigtriangledown', '\\bigtriangleup',
@@ -673,66 +946,21 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       '\\minuso',
     ]),
   },
-  {
-    label: 'HTML',
-    items: templateItems([
-      ['href', '\\href{#?}{#?}'],
-      ['url', '\\url{#?}'],
-      ['includegraphics', '\\includegraphics[height=#?]{#?}'],
-      ['htmlId', '\\htmlId{#?}{#?}'],
-      ['htmlClass', '\\htmlClass{#?}{#?}'],
-      ['htmlStyle', '\\htmlStyle{#?}{#?}'],
-      ['htmlData', '\\htmlData{#?}{#?}'],
-    ]),
-  },
-  {
-    label: 'Macros',
-    items: templateItems([
-      ['def', '\\def\\foo{#?}'],
-      ['gdef', '\\gdef\\foo#1{#?}'],
-      ['edef', '\\edef\\foo{#?}'],
-      ['xdef', '\\xdef\\foo{#?}'],
-      ['let', '\\let\\foo=\\bar'],
-      ['futurelet', '\\futurelet\\foo\\bar #?'],
-      ['global def', '\\global\\def\\foo{#?}'],
-      ['newcommand', '\\newcommand\\foo[1]{#?}'],
-      ['renewcommand', '\\renewcommand\\foo[1]{#?}'],
-      ['providecommand', '\\providecommand\\foo[1]{#?}'],
-      ['char', '\\char"#?'],
-      ['mathchoice', '\\mathchoice{#?}{#?}{#?}{#?}'],
-      ['TextOrMath', '\\TextOrMath{#?}{#?}'],
-      ['@ifstar', '\\@ifstar{#?}{#?}'],
-      ['@ifnextchar', '\\@ifnextchar#?{#?}{#?}'],
-      ['@firstoftwo', '\\@firstoftwo{#?}{#?}'],
-      ['@secondoftwo', '\\@secondoftwo{#?}{#?}'],
-      ['relax', '\\relax'],
-      ['expandafter', '\\expandafter#?'],
-      ['noexpand', '\\noexpand#?'],
-    ]),
-  },
+
 ]
 
 const DROPDOWN_GROUP_LABELS = [
   'Greek',
-  'Environments',
   'Accents',
   'Delimiters',
-  'Big Operators',
-  'More Operators',
+  'Operators',
   'Fractions',
   'Relations',
-  'More Relations',
-  'Negated Relations',
   'Sets & Logic',
   'Arrows',
-  'More Arrows',
-  'Extensible Arrows',
   'Notation',
   'Layout',
-  'Fonts & Style',
   'Symbols',
-  'HTML',
-  'Macros',
   'Functions',
 ]
 const DROPDOWN_GROUP_LABEL_SET = new Set(DROPDOWN_GROUP_LABELS)
@@ -880,10 +1108,18 @@ function SymbolDropdown({
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [openVariantKey, setOpenVariantKey] = useState<string | null>(null)
   const [indexedFunctionDefaults, setIndexedFunctionDefaults] = useState<Set<string>>(() => new Set())
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+  const [delimiterSizeId, setDelimiterSizeId] = useState(DELIMITER_SIZE_PRESETS[1].id)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, maxHeight: 320 })
   const [floatingTooltip, setFloatingTooltip] = useState<{ title: string; top: number; left: number; placement: 'above' | 'below' } | null>(null)
   const isFunctionsGroup = group.label === 'Functions'
-  const isWideDropdown = isFunctionsGroup || group.items.some((item) => item.display.length > 4)
+  const isRelationsGroup = group.label === 'Relations'
+  const isOperatorsGroup = group.label === 'Operators'
+  const isArrowsGroup = group.label === 'Arrows'
+  const isDelimitersGroup = group.label === 'Delimiters'
+  const isWideDropdown = isFunctionsGroup || isDelimitersGroup || group.items.some((item) => String(symbolItemTitle(item)).length > 12)
+  const delimiterSizePreset = DELIMITER_SIZE_PRESETS.find((option) => option.id === delimiterSizeId) ?? DELIMITER_SIZE_PRESETS[1]
+  const buildDelimiterTemplate = (option: DelimiterPairOption) =>
+    `${delimiterSizePreset.left}${option.left}{#?}${delimiterSizePreset.right}${option.right}`
   const menuSections = group.label === 'Greek'
     ? [
       {
@@ -897,29 +1133,46 @@ function SymbolDropdown({
       { label: 'Hebrew', items: group.items.filter((item) => HEBREW_SYMBOL_VALUES.has(item.value)) },
       { label: 'Other letters', items: group.items.filter((item) => OTHER_LETTER_SYMBOL_VALUES.has(item.value)) },
     ]
-    : isFunctionsGroup
-      ? (() => {
-        const usedValues = new Set<string>()
-        const sections = FUNCTION_SECTION_VALUES
-          .map((section) => {
-            const sectionItems = section.values
-              .map((value) => group.items.find((item) => item.value === value))
-              .filter((item): item is SymbolItem => Boolean(item))
-            sectionItems.forEach((item) => usedValues.add(item.value))
-            return { label: section.label, items: sectionItems }
-          })
-          .filter((section) => section.items.length > 0)
-
-        const uncategorized = group.items.filter((item) => !usedValues.has(item.value))
-        if (uncategorized.length > 0) {
-          sections.push({ label: 'Other', items: uncategorized })
-        }
-
-        return sections
-      })()
-      : [
-        { label: null, items: group.items },
+    : isRelationsGroup
+      ? [
+        { label: 'Common Relations', items: RELATIONS_COMMON_ITEMS },
+        { label: 'Other Relations', items: commandItems(RELATIONS_OTHER_VALUES) },
+        { label: 'Negated Relations', items: commandItems(RELATIONS_NEGATED_VALUES) },
       ]
+      : isOperatorsGroup
+        ? [
+          { label: 'Common Operators', items: OPERATORS_COMMON_ITEMS },
+          { label: 'Miscellaneous Operators', items: OPERATORS_MISC_ITEMS },
+        ]
+        : isArrowsGroup
+          ? [
+            { label: 'Arrows', items: ARROWS_COMMON_ITEMS },
+            { label: 'More Arrows', items: ARROWS_MORE_ITEMS },
+            { label: 'Extensible Arrows', items: ARROWS_EXTENSIBLE_ITEMS },
+          ]
+          : isFunctionsGroup
+            ? (() => {
+              const usedValues = new Set<string>()
+              const sections = FUNCTION_SECTION_VALUES
+                .map((section) => {
+                  const sectionItems = section.values
+                    .map((value) => group.items.find((item) => item.value === value))
+                    .filter((item): item is SymbolItem => Boolean(item))
+                  sectionItems.forEach((item) => usedValues.add(item.value))
+                  return { label: section.label, items: sectionItems }
+                })
+                .filter((section) => section.items.length > 0)
+
+              const uncategorized = group.items.filter((item) => !usedValues.has(item.value))
+              if (uncategorized.length > 0) {
+                sections.push({ label: 'Other', items: uncategorized })
+              }
+
+              return sections
+            })()
+            : [
+              { label: null, items: group.items },
+            ]
 
   const updateMenuPosition = useCallback(() => {
     const button = buttonRef.current
@@ -927,9 +1180,19 @@ function SymbolDropdown({
 
     const rect = button.getBoundingClientRect()
     const menuWidth = Math.min(isWideDropdown ? 480 : 288, window.innerWidth - 32)
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 16)
+    const spaceAbove = Math.max(0, rect.top - 16)
+    const prefersAbove = spaceBelow < 220 && spaceAbove > spaceBelow
+    const preferredMaxHeight = Math.min(window.innerHeight - 32, isWideDropdown ? 608 : 520)
+    const availableHeight = prefersAbove ? spaceAbove : spaceBelow
+    const maxHeight = Math.max(180, Math.min(preferredMaxHeight, availableHeight))
+    const top = prefersAbove
+      ? Math.max(16, rect.top - maxHeight - 6)
+      : Math.max(16, Math.min(rect.bottom + 6, window.innerHeight - maxHeight - 16))
     setMenuPosition({
-      top: rect.bottom + 6,
+      top,
       left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)),
+      maxHeight,
     })
   }, [isWideDropdown])
 
@@ -944,6 +1207,7 @@ function SymbolDropdown({
       placement,
     })
   }, [])
+  const menuScrollMaxHeight = Math.max(120, menuPosition.maxHeight - 18)
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1000,7 +1264,61 @@ function SymbolDropdown({
           role="menu"
           style={menuPosition}
         >
-          <div ref={menuRef} className="symbol-dropdown-menu-scroll custom-scrollbar-target">
+          <div
+            ref={menuRef}
+            className="symbol-dropdown-menu-scroll custom-scrollbar-target"
+            style={{ maxHeight: `${menuScrollMaxHeight}px` }}
+          >
+            {isDelimitersGroup ? (
+              <div className="symbol-dropdown-section">
+                <span className="symbol-dropdown-section-title">Bracket pairs</span>
+                <div className="symbol-delimiter-size-row" role="radiogroup" aria-label="Bracket size">
+                  {DELIMITER_SIZE_PRESETS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`symbol-btn symbol-delimiter-size-button${delimiterSizeId === option.id ? ' symbol-delimiter-size-button-active' : ''}`}
+                      aria-pressed={delimiterSizeId === option.id}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setDelimiterSizeId(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="symbol-delimiter-pair-grid">
+                  {DELIMITER_PAIR_OPTIONS.map((option) => {
+                    const title = `${option.label} (${delimiterSizePreset.left}${option.left}...${delimiterSizePreset.right}${option.right})`
+                    return (
+                      <div
+                        key={option.id}
+                        className="cell-button-tooltip-wrap symbol-dropdown-item-wrap symbol-dropdown-item-wrap-functions"
+                        onMouseEnter={(event) => showFloatingTooltip(title, event.currentTarget)}
+                        onMouseLeave={() => setFloatingTooltip(null)}
+                        onFocusCapture={(event) => showFloatingTooltip(title, event.currentTarget)}
+                        onBlurCapture={() => setFloatingTooltip(null)}
+                      >
+                        <button
+                          type="button"
+                          className="symbol-btn symbol-dropdown-item symbol-dropdown-item-functions"
+                          role="menuitem"
+                          title={title}
+                          aria-label={title}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            onInsertSnippet(buildDelimiterTemplate(option), 'write')
+                            setIsOpen(false)
+                          }}
+                        >
+                          {delimiterPreview(option)}
+                        </button>
+                        <span className="cell-button-tooltip">{title}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
             {menuSections.map((section) => (
               <div key={section.label ?? group.label} className="symbol-dropdown-section">
                 {section.label ? <span className="symbol-dropdown-section-title">{section.label}</span> : null}
@@ -1009,9 +1327,9 @@ function SymbolDropdown({
                     <div
                       key={`${section.label ?? group.label}-${item.value}`}
                       className={`cell-button-tooltip-wrap symbol-dropdown-item-wrap${isWideDropdown ? ' symbol-dropdown-item-wrap-functions' : ''}`}
-                      onMouseEnter={(event) => showFloatingTooltip(item.title, event.currentTarget)}
+                      onMouseEnter={(event) => showFloatingTooltip(symbolItemTitle(item), event.currentTarget)}
                       onMouseLeave={() => setFloatingTooltip(null)}
-                      onFocusCapture={(event) => showFloatingTooltip(item.title, event.currentTarget)}
+                      onFocusCapture={(event) => showFloatingTooltip(symbolItemTitle(item), event.currentTarget)}
                       onBlurCapture={() => setFloatingTooltip(null)}
                     >
                       {isFunctionsGroup ? (
@@ -1021,8 +1339,8 @@ function SymbolDropdown({
                               type="button"
                               className={`symbol-btn symbol-dropdown-item symbol-dropdown-item-functions${indexedFunctionDefaults.has(item.value) ? ' symbol-dropdown-item-functions-indexed-default' : ''}`}
                               role="menuitem"
-                              title={item.title}
-                              aria-label={item.title}
+                              title={symbolItemTitle(item)}
+                              aria-label={symbolItemTitle(item)}
                               onMouseDown={(event) => event.preventDefault()}
                               onClick={() => {
                                 const useIndexedDefault = indexedFunctionDefaults.has(item.value)
@@ -1032,22 +1350,22 @@ function SymbolDropdown({
                             >
                               {indexedFunctionDefaults.has(item.value) ? (
                                 <span className="symbol-dropdown-item-variant-label">
-                                  <span>{item.display}</span>
+                                  <span>{symbolItemDisplay(item)}</span>
                                   <span className="symbol-dropdown-item-variant-slot" aria-hidden="true">
                                     <FontAwesomeIcon icon={faSquareRegular} />
                                   </span>
                                 </span>
-                              ) : item.display}
+                              ) : symbolItemDisplay(item)}
                             </button>
-                            <span className="cell-button-tooltip">{item.title}</span>
+                            <span className="cell-button-tooltip">{symbolItemTitle(item)}</span>
                           </div>
                           <div className="cell-button-tooltip-wrap symbol-dropdown-item-variant-wrap">
                             <button
                               type="button"
                               className="symbol-btn symbol-dropdown-item-variant-trigger"
                               role="menuitem"
-                              title={`${item.title} insertion options`}
-                              aria-label={`${item.title} insertion options`}
+                              title={`${symbolItemTitle(item)} insertion options`}
+                              aria-label={`${symbolItemTitle(item)} insertion options`}
                               onMouseDown={(event) => event.preventDefault()}
                               onClick={() => {
                                 const key = `${section.label ?? group.label}-${item.value}`
@@ -1062,8 +1380,8 @@ function SymbolDropdown({
                                   type="button"
                                   className="symbol-btn symbol-dropdown-item-variant-option"
                                   role="menuitem"
-                                  title={`${item.title} with argument slot`}
-                                  aria-label={`${item.title} with argument slot`}
+                                  title={`${symbolItemTitle(item)} with argument slot`}
+                                  aria-label={`${symbolItemTitle(item)} with argument slot`}
                                   onMouseDown={(event) => event.preventDefault()}
                                   onClick={() => {
                                     onInsertSnippet(item.value, 'func-slot')
@@ -1077,7 +1395,7 @@ function SymbolDropdown({
                                   }}
                                 >
                                   <span className="symbol-dropdown-item-variant-label">
-                                    <span>{item.display}</span>
+                                    <span>{symbolItemDisplay(item)}</span>
                                     <span className="symbol-dropdown-item-variant-slot" aria-hidden="true">
                                       <FontAwesomeIcon icon={faSquareRegular} />
                                     </span>
@@ -1087,8 +1405,8 @@ function SymbolDropdown({
                                   type="button"
                                   className="symbol-btn symbol-dropdown-item-variant-option"
                                   role="menuitem"
-                                  title={item.title}
-                                  aria-label={item.title}
+                                  title={symbolItemTitle(item)}
+                                  aria-label={symbolItemTitle(item)}
                                   onMouseDown={(event) => event.preventDefault()}
                                   onClick={() => {
                                     onInsertSnippet(item.value, item.mode)
@@ -1101,7 +1419,7 @@ function SymbolDropdown({
                                     setIsOpen(false)
                                   }}
                                 >
-                                  {item.display}
+                                  {symbolItemDisplay(item)}
                                 </button>
                               </div>
                             ) : null}
@@ -1113,17 +1431,17 @@ function SymbolDropdown({
                             type="button"
                             className={`symbol-btn symbol-dropdown-item${isWideDropdown ? ' symbol-dropdown-item-functions' : ''}`}
                             role="menuitem"
-                            title={item.title}
-                            aria-label={item.title}
+                            title={symbolItemTitle(item)}
+                            aria-label={symbolItemTitle(item)}
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => {
                               onInsertSnippet(item.value, item.mode)
                               setIsOpen(false)
                             }}
                           >
-                            {item.display}
+                            {symbolItemDisplay(item)}
                           </button>
-                          <span className="cell-button-tooltip">{item.title}</span>
+                          <span className="cell-button-tooltip">{symbolItemTitle(item)}</span>
                         </>
                       )}
                     </div>
@@ -1245,20 +1563,20 @@ export function EditorToolbar({
             <span className="cell-button-tooltip-wrap">
               <button
                 type="button"
-                aria-label="Fraction — creates numerator/denominator slots"
+                aria-label="Fraction - creates numerator/denominator slots"
                 disabled={!hasActiveCell}
                 className="symbol-btn symbol-btn-featured"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onInsertSnippet('\\frac', 'cmd')}
               >
-                a/b
+                <TextFractionDisplay numerator="a" denominator="b" />
               </button>
               <span className="cell-button-tooltip">Fraction</span>
             </span>
             <span className="cell-button-tooltip-wrap">
               <button
                 type="button"
-                aria-label="Square root — type inside the radical"
+                aria-label="Square root - type inside the radical"
                 disabled={!hasActiveCell}
                 className="symbol-btn symbol-btn-featured"
                 onMouseDown={(e) => e.preventDefault()}
@@ -1285,26 +1603,26 @@ export function EditorToolbar({
             <span className="cell-button-tooltip-wrap">
               <button
                 type="button"
-                aria-label="Superscript / Power — type the exponent"
+                aria-label="Superscript / Power - type the exponent"
                 disabled={!hasActiveCell}
                 className="symbol-btn symbol-btn-featured"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onInsertSnippet('^', 'cmd')}
               >
-                xⁿ
+                <span>x<sup>n</sup></span>
               </button>
               <span className="cell-button-tooltip">Power / Exponent</span>
             </span>
             <span className="cell-button-tooltip-wrap">
               <button
                 type="button"
-                aria-label="Subscript — type the subscript"
+                aria-label="Subscript - type the subscript"
                 disabled={!hasActiveCell}
                 className="symbol-btn symbol-btn-featured"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onInsertSnippet('_', 'cmd')}
               >
-                xₙ
+                <span>x<sub>n</sub></span>
               </button>
               <span className="cell-button-tooltip">Subscript</span>
             </span>
@@ -1416,18 +1734,18 @@ export function EditorToolbar({
             <div key={group.label} className="toolbar-group toolbar-group-bordered">
               <span className="toolbar-group-label">{group.label}</span>
               {group.items.map((item) => (
-                <span key={item.title} className="cell-button-tooltip-wrap">
+                <span key={symbolItemTitle(item)} className="cell-button-tooltip-wrap">
                   <button
                     type="button"
-                    aria-label={item.title}
+                    aria-label={symbolItemTitle(item)}
                     disabled={!hasActiveCell}
                     className="symbol-btn"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => onInsertSnippet(item.value, item.mode)}
                   >
-                    {item.display}
+                    {symbolItemDisplay(item)}
                   </button>
-                  <span className="cell-button-tooltip">{item.title}</span>
+                  <span className="cell-button-tooltip">{symbolItemTitle(item)}</span>
                 </span>
               ))}
             </div>
@@ -1584,7 +1902,7 @@ export function EditorToolbar({
           try {
             const text = await navigator.clipboard.readText()
             document.execCommand('insertText', false, text)
-          } catch(e) {
+          } catch (e) {
             console.error(e)
           }
         })}>

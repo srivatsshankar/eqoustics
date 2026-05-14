@@ -34,8 +34,8 @@ function renderFormattedCell(latex: string): string | null {
 /**
  * Render the notebook as a self-contained HTML document for print/PDF export.
  *
- * Each cell's LaTeX is rendered client-side by embedding the KaTeX auto-render
- * script from a CDN.  This avoids needing `katex` as a build dependency.
+ * Each cell's LaTeX is rendered client-side by embedding MathJax from a CDN.
+ * This keeps printable output aligned with the app's LaTeX source format.
  */
 export function renderPrintableNotebook(document: NotebookDocument): string {
   const content = document.cells
@@ -43,7 +43,7 @@ export function renderPrintableNotebook(document: NotebookDocument): string {
       if (!cell.latex.trim()) return '' // skip empty cells
       const formatted = renderFormattedCell(cell.latex.trim())
       if (formatted) return `<section class="print-cell">${formatted}</section>`
-      // Wrap in $$ for display-mode rendering by KaTeX auto-render
+      // Wrap in $$ for display-mode rendering by the print renderer.
       return `<section class="print-cell">$$${escapeHtml(cell.latex)}$$</section>`
     })
     .filter(Boolean)
@@ -54,10 +54,18 @@ export function renderPrintableNotebook(document: NotebookDocument): string {
   <head>
     <meta charset="utf-8" />
     <title>${escapeHtml(document.metadata.title)}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
-            onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]})"></script>
+    <script>
+      window.MathJax = {
+        tex: {
+          displayMath: [['$$', '$$']],
+          inlineMath: [['$', '$']]
+        },
+        svg: {
+          fontCache: 'global'
+        }
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
     <style>
       :root {
         color: #102a43;
