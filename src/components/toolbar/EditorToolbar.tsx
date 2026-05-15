@@ -9,6 +9,7 @@ import {
   faFolderOpen,
   faHeading,
   faItalic,
+  faLink,
   faListOl,
   faListUl,
   faArrowRotateLeft,
@@ -21,10 +22,13 @@ import {
   faCopy,
   faScissors,
   faPaste,
+  faTrash,
 } from '@fortawesome/free-solid-svg-icons'
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
+import { CasesDropdown } from './CasesDropdown'
 import { MatrixDropdown } from './MatrixDropdown'
 import type { TextFormatCommand } from '../cell/CellEditor'
+import type { CopyAsFormat } from '../../clipboard/editorClipboard'
 import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
 
 interface EditorToolbarProps {
@@ -32,6 +36,7 @@ interface EditorToolbarProps {
   canSave: boolean
   onInsertSnippet: (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template' | 'func-slot') => void
   onFormatText: (format: TextFormatCommand) => void
+  onCreateLink: () => void
   onNewNotebook: () => void
   onOpenNotebook: () => void
   onExportPdf: () => void
@@ -42,6 +47,13 @@ interface EditorToolbarProps {
   canRedo: boolean
   onUndo: () => void
   onRedo: () => void
+  canCopyContent: boolean
+  canDeleteSelection: boolean
+  onCopyContent: () => void | Promise<void>
+  onCopyAs: (format: CopyAsFormat) => void | Promise<void>
+  onCutContent: () => void | Promise<void>
+  onDeleteSelection: () => void
+  onMenuVisibilityChange?: (isOpen: boolean) => void
 }
 
 interface SymbolItem {
@@ -211,6 +223,7 @@ const LeftHarpoonSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 18
 const RightHarpoonSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 18" style={s}><line x1="1" y1="10" x2="92" y2="10" stroke="currentColor" strokeWidth={5} /><line x1="92" y1="10" x2="70" y2="2" stroke="currentColor" strokeWidth={5} /></svg>
 const OverbraceSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={{ height: '0.7em', display: 'block', width: '100%' }}><path d="M2,28 C2,12 42,10 50,2 C58,10 98,12 98,28" fill="none" stroke="currentColor" strokeWidth={3.5} /></svg>
 const UnderbraceSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 30" style={{ height: '0.7em', display: 'block', width: '100%' }}><path d="M2,2 C2,18 42,20 50,28 C58,20 98,18 98,2" fill="none" stroke="currentColor" strokeWidth={3.5} /></svg>
+const OverbracketSvg = () => <svg preserveAspectRatio="none" viewBox="0 0 100 28" style={{ height: '0.7em', display: 'block', width: '100%' }}><polyline points="4,26 4,4 96,4 96,26" fill="none" stroke="currentColor" strokeWidth={4} strokeLinejoin="miter" strokeLinecap="square" /></svg>
 
 const MathAccentPreview = ({ mark, markEl, placement = 'over', wide = false }: { mark?: string; markEl?: React.ReactNode; placement?: 'over' | 'under'; wide?: boolean }) => {
   const markContent = markEl ?? mark
@@ -223,19 +236,27 @@ const MathAccentPreview = ({ mark, markEl, placement = 'over', wide = false }: {
   )
 }
 
-const OverbracePreview = () => (
+const OverbracePreview = ({ withAnnotation = true }: { withAnnotation?: boolean }) => (
   <span className="math-accent math-brace-accent math-accent-over" style={{ fontSize: '0.72em', verticalAlign: 'middle' }}>
-    <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span>
+    {withAnnotation ? <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span> : null}
     <span className="math-accent-mark math-brace-accent-mark" style={{ color: 'currentColor' }}><OverbraceSvg /></span>
     <span style={{ fontStyle: 'italic' }}>xp</span>
   </span>
 )
 
-const UnderbracePreview = () => (
+const UnderbracePreview = ({ withAnnotation = true }: { withAnnotation?: boolean }) => (
   <span className="math-accent math-brace-accent math-accent-under" style={{ fontSize: '0.72em', verticalAlign: 'middle' }}>
     <span style={{ fontStyle: 'italic' }}>xp</span>
     <span className="math-accent-mark math-brace-accent-mark" style={{ color: 'currentColor' }}><UnderbraceSvg /></span>
-    <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span>
+    {withAnnotation ? <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span> : null}
+  </span>
+)
+
+const OverbracketPreview = ({ withAnnotation = true }: { withAnnotation?: boolean }) => (
+  <span className="math-accent math-brace-accent math-accent-over" style={{ fontSize: '0.72em', verticalAlign: 'middle' }}>
+    {withAnnotation ? <span className="math-slot" data-slot="annotation" style={{ fontStyle: 'italic', fontSize: '0.68em' }}>n</span> : null}
+    <span className="math-accent-mark math-brace-accent-mark" style={{ color: 'currentColor' }}><OverbracketSvg /></span>
+    <span style={{ fontStyle: 'italic' }}>xp</span>
   </span>
 )
 
@@ -325,8 +346,16 @@ function cleanSymbolItemDisplay(item: SymbolItem): React.ReactNode {
       return <MathAccentPreview markEl={<LineSvg />} placement="under" wide />
     case '\\overbrace{#?}^{#?}':
       return <OverbracePreview />
+    case '\\overbrace{#?}':
+      return <OverbracePreview withAnnotation={false} />
     case '\\underbrace{#?}_{#?}':
       return <UnderbracePreview />
+    case '\\underbrace{#?}':
+      return <UnderbracePreview withAnnotation={false} />
+    case '\\overbracket{#?}^{#?}':
+      return <OverbracketPreview />
+    case '\\overbracket{#?}':
+      return <OverbracketPreview withAnnotation={false} />
     case '\\overleftarrow{#?}':
       return <MathAccentPreview markEl={<LeftArrowSvg />} wide />
     case '\\underleftarrow{#?}':
@@ -839,6 +868,10 @@ const SYMBOL_GROUPS: SymbolGroup[] = [
       { display: 'underbar', value: '\\underbar{ }', title: 'Underbar (\\underbar)', mode: 'write' },
       { display: 'overbrace', value: '\\overbrace{ }^{ }', title: 'Overbrace with label (\\overbrace)', mode: 'write' },
       { display: 'underbrace', value: '\\underbrace{ }_{ }', title: 'Underbrace with label (\\underbrace)', mode: 'write' },
+      { display: 'overbracket', value: '\\overbracket{ }^{ }', title: 'Overbracket with label (\\overbracket)', mode: 'write' },
+      { display: 'overbrace', value: '\\overbrace{ }', title: 'Overbrace without label (\\overbrace)', mode: 'write' },
+      { display: 'underbrace', value: '\\underbrace{ }', title: 'Underbrace without label (\\underbrace)', mode: 'write' },
+      { display: 'overbracket', value: '\\overbracket{ }', title: 'Overbracket without label (\\overbracket)', mode: 'write' },
       { display: 'overleftarrow', value: '\\overleftarrow{ }', title: 'Left arrow over (\\overleftarrow)', mode: 'write' },
       { display: 'overrightarrow', value: '\\overrightarrow{ }', title: 'Right arrow over (\\overrightarrow)', mode: 'write' },
       { display: 'underleftarrow', value: '\\underleftarrow{ }', title: 'Left arrow under (\\underleftarrow)', mode: 'write' },
@@ -1470,6 +1503,7 @@ export function EditorToolbar({
   canSave,
   onInsertSnippet,
   onFormatText,
+  onCreateLink,
   onExportPdf,
   onExportLatex,
   onNewNotebook,
@@ -1480,6 +1514,13 @@ export function EditorToolbar({
   canRedo,
   onUndo,
   onRedo,
+  canCopyContent,
+  canDeleteSelection,
+  onCopyContent,
+  onCopyAs,
+  onCutContent,
+  onDeleteSelection,
+  onMenuVisibilityChange,
 }: EditorToolbarProps) {
   const inlineSymbolGroups = SYMBOL_GROUPS.filter((group) => !DROPDOWN_GROUP_LABEL_SET.has(group.label))
   const dropdownSymbolGroups = DROPDOWN_GROUP_LABELS
@@ -1488,7 +1529,12 @@ export function EditorToolbar({
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false)
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false)
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false)
+  const [isCopyAsMenuOpen, setIsCopyAsMenuOpen] = useState(false)
   const fileMenuContainerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    onMenuVisibilityChange?.(isFileMenuOpen || isEditMenuOpen)
+  }, [isEditMenuOpen, isFileMenuOpen, onMenuVisibilityChange])
 
   useEffect(() => {
     if (!isFileMenuOpen && !isEditMenuOpen) {
@@ -1500,6 +1546,7 @@ export function EditorToolbar({
         setIsFileMenuOpen(false)
         setIsEditMenuOpen(false)
         setIsExportMenuOpen(false)
+        setIsCopyAsMenuOpen(false)
       }
     }
 
@@ -1512,13 +1559,15 @@ export function EditorToolbar({
     setIsFileMenuOpen(false)
     setIsEditMenuOpen(false)
     setIsExportMenuOpen(false)
+    setIsCopyAsMenuOpen(false)
   }
 
-  const executeEditAction = (action: () => void) => {
-    action()
+  const executeEditAction = (action: () => void | Promise<void>) => {
+    void action()
     setIsFileMenuOpen(false)
     setIsEditMenuOpen(false)
     setIsExportMenuOpen(false)
+    setIsCopyAsMenuOpen(false)
   }
 
   return (
@@ -1535,6 +1584,7 @@ export function EditorToolbar({
               setIsFileMenuOpen((current) => !current)
               setIsEditMenuOpen(false)
               setIsExportMenuOpen(false)
+              setIsCopyAsMenuOpen(false)
             }}
           >
             <span>File</span>
@@ -1549,6 +1599,7 @@ export function EditorToolbar({
               setIsEditMenuOpen((current) => !current)
               setIsFileMenuOpen(false)
               setIsExportMenuOpen(false)
+              setIsCopyAsMenuOpen(false)
             }}
           >
             <span>Edit</span>
@@ -1752,6 +1803,7 @@ export function EditorToolbar({
           ))}
 
           <MatrixDropdown disabled={!hasActiveCell} onInsertSnippet={onInsertSnippet} />
+          <CasesDropdown disabled={!hasActiveCell} onInsertSnippet={onInsertSnippet} />
 
           {dropdownSymbolGroups.map((group) => (
             <div key={group.label} className="toolbar-group toolbar-group-bordered">
@@ -1842,6 +1894,13 @@ export function EditorToolbar({
               </button>
               <span className="cell-button-tooltip">Numbering</span>
             </span>
+            <span className="toolbar-action-divider" aria-hidden="true" />
+            <span className="cell-button-tooltip-wrap">
+              <button type="button" className="icon-button icon-button-compact" disabled={!hasActiveCell} onMouseDown={(event) => event.preventDefault()} onClick={onCreateLink}>
+                <FontAwesomeIcon icon={faLink} />
+              </button>
+              <span className="cell-button-tooltip">Hyperlink</span>
+            </span>
           </div>
         </div>
       </div>
@@ -1892,12 +1951,43 @@ export function EditorToolbar({
           <FontAwesomeIcon icon={faArrowRotateRight} style={{ width: '1rem', marginRight: '0.4rem' }} /> Redo
         </button>
         <div className="menu-divider" />
-        <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => document.execCommand('cut'))}>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canCopyContent} onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(onCutContent)}>
           <FontAwesomeIcon icon={faScissors} style={{ width: '1rem', marginRight: '0.4rem' }} /> Cut
         </button>
-        <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => document.execCommand('copy'))}>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canCopyContent} onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(onCopyContent)}>
           <FontAwesomeIcon icon={faCopy} style={{ width: '1rem', marginRight: '0.4rem' }} /> Copy
         </button>
+        <div className="file-menu-export">
+          <button
+            type="button"
+            className={`file-menu-item file-menu-export-trigger${isCopyAsMenuOpen ? ' file-menu-export-trigger-open' : ''}`}
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={isCopyAsMenuOpen}
+            disabled={!canCopyContent}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setIsCopyAsMenuOpen((current) => !current)}
+          >
+            <span><FontAwesomeIcon icon={faCopy} style={{ width: '1rem', marginRight: '0.4rem' }} /> Copy As...</span>
+            <FontAwesomeIcon icon={faChevronDown} />
+          </button>
+          {isCopyAsMenuOpen ? (
+            <div className="file-menu-export-options" role="menu">
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => onCopyAs('latex'))}>
+                LaTeX
+              </button>
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => onCopyAs('notation'))}>
+                Notation
+              </button>
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => onCopyAs('png'))}>
+                PNG Image
+              </button>
+              <button type="button" className="file-menu-item file-menu-export-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(() => onCopyAs('jpeg'))}>
+                JPEG Image
+              </button>
+            </div>
+          ) : null}
+        </div>
         <button type="button" className="file-menu-item" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(async () => {
           try {
             const text = await navigator.clipboard.readText()
@@ -1907,6 +1997,9 @@ export function EditorToolbar({
           }
         })}>
           <FontAwesomeIcon icon={faPaste} style={{ width: '1rem', marginRight: '0.4rem' }} /> Paste
+        </button>
+        <button type="button" className="file-menu-item" role="menuitem" disabled={!canDeleteSelection} onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(onDeleteSelection)}>
+          <FontAwesomeIcon icon={faTrash} style={{ width: '1rem', marginRight: '0.4rem' }} /> Delete
         </button>
       </div>
     </header>

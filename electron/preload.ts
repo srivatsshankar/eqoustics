@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer, nativeImage } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc/channels'
 import type { FileMenuAction, WindowControlAction, WindowStatePayload } from '../src/shared/ipc/channels'
@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('eqoustics', {
     return ipcRenderer.invoke(IPC_CHANNELS.saveNotebookAs, file) as Promise<{ path: string } | null>
   },
   listRecentFiles: () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles) as Promise<RecentFileEntry[]>,
+  captureHtml: (html: string) => ipcRenderer.invoke(IPC_CHANNELS.captureHtml, html) as Promise<void>,
+  writeClipboardText: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.writeClipboardText, text) as Promise<void>,
+  writeClipboardImage: (dataUrl: string) => clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)),
   windowControl: (action: WindowControlAction) => ipcRenderer.invoke(IPC_CHANNELS.windowControl, action) as Promise<void>,
   getWindowState: () => ipcRenderer.invoke(IPC_CHANNELS.getWindowState) as Promise<WindowStatePayload>,
   onWindowStateChange: (listener: (state: WindowStatePayload) => void) => {

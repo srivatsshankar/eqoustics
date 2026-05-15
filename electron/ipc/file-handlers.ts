@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { readFile, writeFile } from 'node:fs/promises'
+import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 import { IPC_CHANNELS } from '../../src/shared/ipc/channels'
@@ -16,6 +17,13 @@ const MAX_RECENT_FILES = 8
 type ElectronStoreLike = {
   get: (key: string) => unknown
   set: (key: string, value: unknown) => void
+}
+
+type CaptureBounds = {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 function getNotebookFilters() {
@@ -135,5 +143,62 @@ export function registerFileHandlers(mainWindow: BrowserWindow, store: ElectronS
 
   ipcMain.handle(IPC_CHANNELS.listRecentFiles, async () => {
     return (store.get(RECENT_FILES_KEY) as RecentFileEntry[] | undefined) ?? []
+  })
+
+  ipcMain.handle(IPC_CHANNELS.writeClipboardText, (_event, text: string) => {
+    clipboard.writeText(text)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.captureHtml, async (_, html: string) => {
+    const tempPath = path.join(app.getPath('temp'), `eq-cap-${Date.now()}.html`)
+
+    const win = new BrowserWindow({
+      show: false,
+      frame: false,
+      skipTaskbar: true,
+      width: 1400,
+      height: 200,
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    })
+
+    try {
+      await writeFile(tempPath, html, 'utf8')
+      await win.loadURL(pathToFileURL(tempPath).href)
+
+      const bounds: CaptureBounds = await win.webContents.executeJavaScript(
+        `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => {
+          const content = document.querySelector('.copy-render-content') || document.body
+          const elements = [content, ...content.querySelectorAll('*')]
+          const rects = elements.flatMap((element) => Array.from(element.getClientRects()))
+            .filter((rect) => rect.width > 0 && rect.height > 0)
+
+          if (rects.length === 0) {
+            resolve({ x: 0, y: 0, width: 1, height: 1 })
+            return
+          }
+
+          const bleed = 1
+          const left = Math.max(0, Math.floor(Math.min(...rects.map((rect) => rect.left)) - bleed))
+          const top = Math.max(0, Math.floor(Math.min(...rects.map((rect) => rect.top)) - bleed))
+          const right = Math.ceil(Math.max(...rects.map((rect) => rect.right)) + bleed)
+          const bottom = Math.ceil(Math.max(...rects.map((rect) => rect.bottom)) + bleed)
+
+          resolve({
+            x: left,
+            y: top,
+            width: Math.max(1, right - left),
+            height: Math.max(1, bottom - top),
+          })
+        })))`
+      )
+
+      win.setContentSize(Math.max(40, bounds.x + bounds.width), Math.max(1, bounds.y + bounds.height))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const image = await win.webContents.capturePage(bounds)
+      clipboard.writeImage(image)
+    } finally {
+      win.destroy()
+      try { await unlink(tempPath) } catch { /* ignore */ }
+    }
   })
 }

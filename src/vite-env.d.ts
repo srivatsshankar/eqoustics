@@ -14,6 +14,9 @@ declare global {
 			saveNotebook: (file: StoredNotebookFile & { title: string }) => Promise<{ path: string }>
 			saveNotebookAs: (file: { title: string; content: string }) => Promise<{ path: string } | null>
 			listRecentFiles: () => Promise<RecentFileEntry[]>
+			captureHtml: (html: string) => Promise<void>
+			writeClipboardText: (text: string) => Promise<void>
+			writeClipboardImage?: (dataUrl: string) => void
 			windowControl: (action: WindowControlAction) => Promise<void>
 			getWindowState: () => Promise<WindowStatePayload>
 			onWindowStateChange: (listener: (state: WindowStatePayload) => void) => () => void

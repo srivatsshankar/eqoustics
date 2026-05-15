@@ -7,6 +7,8 @@ export const IPC_CHANNELS = {
   saveNotebook: 'notebook:save',
   saveNotebookAs: 'notebook:saveAs',
   listRecentFiles: 'recent-files:list',
+  captureHtml: 'clipboard:captureHtml',
+  writeClipboardText: 'clipboard:writeText',
   windowControl: 'window:control',
   getWindowState: 'window:state:get',
   windowStateChanged: 'window:state:changed',

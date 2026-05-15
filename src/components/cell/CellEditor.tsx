@@ -13,6 +13,7 @@ const ROW_START_MATH_CARET_RATIO = 0.5
 export interface CellInsertHandle {
   insert: (snippet: string, mode?: InsertMode) => void
   format: (format: TextFormatCommand) => void
+  link: (url: string) => void
   getLatex: () => string
   getSelection: () => EditorSelectionState | null
   restoreSelection: (selection: EditorSelectionState) => void
@@ -53,6 +54,7 @@ interface CellEditorProps {
   onSelectionRestoreComplete?: () => void
   onAddCellAbove: (initialLatex?: string) => void
   onAddCellBelow: (initialLatex?: string) => void
+  onAddCellsBelow: (initialLatexRows: string[]) => void
   onDeleteCell: () => void
   rowListKind?: 'bulletList' | 'numberedList' | null
   numberedListValue?: number
@@ -232,12 +234,10 @@ const COMMAND_DISPLAY: Record<string, string> = {
   '\\backslash': '\\',
 }
 
-const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix', 'Vmatrix'])
+const MATRIX_ENVS = new Set(['matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix', 'Vmatrix', 'smallmatrix'])
 const GENERIC_ENVIRONMENTS = new Set([
-  'array',
   'cases',
   'rcases',
-  'smallmatrix',
   'subarray',
   'equation',
   'equation*',
@@ -264,7 +264,6 @@ const GENERIC_ENVIRONMENTS = new Set([
 ])
 type GenericArgKind = 'required' | 'optional'
 const GENERIC_ENVIRONMENT_ARG_SPECS: Record<string, GenericArgKind[]> = {
-  array: ['required'],
   subarray: ['required'],
   alignat: ['required'],
   'alignat*': ['required'],
@@ -416,12 +415,27 @@ function escapeAttr(value: string): string {
   return escapeHtml(value).replace(/'/g, '&#39;')
 }
 
+function escapeLatexLiteral(value: string, escapeMathSpecials = false): string {
+  return Array.from(value).map((char) => {
+    if (char === '\\') return '\\textbackslash{}'
+    if (char === '{' || char === '}') return `\\${char}`
+    if (!escapeMathSpecials) return char
+    if (char === '~') return '\\textasciitilde{}'
+    if ('_^$%&#'.includes(char)) return `\\${char}`
+    return char
+  }).join('')
+}
+
 function escapeTextLatex(value: string): string {
-  return value.replace(/\\/g, '\\textbackslash{}').replace(/[{}]/g, (match) => `\\${match}`)
+  return escapeLatexLiteral(value)
 }
 
 function escapeMathText(value: string): string {
-  return value.replace(/[{}]/g, (match) => `\\${match}`)
+  return escapeLatexLiteral(value, true)
+}
+
+function escapeHrefLatex(value: string): string {
+  return escapeLatexLiteral(value)
 }
 
 const SPACE_WIDTHS: Record<string, string> = {
@@ -434,7 +448,28 @@ const SPACE_WIDTHS: Record<string, string> = {
   '~': '0.333em',
 }
 
+const LITERAL_LATEX_COMMANDS = new Set([
+  '\\_',
+  '\\^',
+  '\\$',
+  '\\%',
+  '\\&',
+  '\\#',
+  '\\{',
+  '\\}',
+  '\\textbackslash{}',
+  '\\textasciitilde{}',
+])
+
 function commandHtml(command: string): string {
+  if (command === '\\textbackslash') {
+    return `<span class="math-symbol" data-latex="\\textbackslash{}" contenteditable="false">\\</span>`
+  }
+
+  if (command === '\\textasciitilde') {
+    return `<span class="math-symbol" data-latex="\\textasciitilde{}" contenteditable="false">~</span>`
+  }
+
   if (command === '\\\\' || command === '\\newline') {
     return `<span class="math-newline" data-latex="${escapeAttr(command)}" data-layout-label="${escapeAttr(command)}" contenteditable="false"></span>`
   }
@@ -565,6 +600,11 @@ function formatHtml(format: TextFormatCommand, content = '', marker = false): st
   return `<span class="${className}" data-format="${format}">${markerHtml}${content}</span>`
 }
 
+function linkHtml(url: string, content = '', marker = false): string {
+  const markerHtml = marker ? '<span data-caret-marker="true"></span>' : ''
+  return `<span class="text-link" data-link-url="${escapeAttr(url)}">${markerHtml}${content}</span>`
+}
+
 function listHtml(format: 'bulletList' | 'numberedList', content = '', marker = false, number = 1): string {
   const markerHtml = marker ? '<span data-caret-marker="true"></span>' : ''
   const markerClass = format === 'bulletList' ? 'text-list-bullet-marker' : 'text-list-number-marker'
@@ -687,12 +727,14 @@ function phaseHtml(command: '\\phase' | '\\angln', body = '', focusBody = false)
 
 const BRACE_SVG_OVER = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.7em"><path d="M2,28 C2,12 42,10 50,2 C58,10 98,12 98,28" fill="none" stroke="currentColor" stroke-width="3.5"/></svg>'
 const BRACE_SVG_UNDER = '<svg preserveAspectRatio="none" viewBox="0 0 100 30" style="height:0.7em"><path d="M2,2 C2,18 42,20 50,28 C58,20 98,18 98,2" fill="none" stroke="currentColor" stroke-width="3.5"/></svg>'
+const BRACKET_SVG_OVER = '<svg preserveAspectRatio="none" viewBox="0 0 100 28" style="height:0.7em"><polyline points="4,26 4,4 96,4 96,26" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="miter" stroke-linecap="square"/></svg>'
 
-function braceAccentHtml(command: '\\overbrace' | '\\underbrace', body = '', annotation = '', focusBody = false): string {
-  const isOver = command === '\\overbrace'
-  const mark = `<span class="math-accent-mark math-brace-accent-mark" contenteditable="false">${isOver ? BRACE_SVG_OVER : BRACE_SVG_UNDER}</span>`
+function braceAccentHtml(command: '\\overbrace' | '\\underbrace' | '\\overbracket', body = '', annotation?: string, focusBody = false): string {
+  const isOver = command !== '\\underbrace'
+  const markHtml = command === '\\overbracket' ? BRACKET_SVG_OVER : isOver ? BRACE_SVG_OVER : BRACE_SVG_UNDER
+  const mark = `<span class="math-accent-mark math-brace-accent-mark" contenteditable="false">${markHtml}</span>`
   const bodySlot = slotHtml('body', body, focusBody)
-  const annotationSlot = slotHtml('annotation', annotation)
+  const annotationSlot = annotation === undefined ? '' : slotHtml('annotation', annotation)
   const content = isOver
     ? `${annotationSlot}${mark}${bodySlot}`
     : `${bodySlot}${mark}${annotationSlot}`
@@ -886,7 +928,7 @@ function latexTemplateHtml(snippet: string): string {
   return `<span class="math-latex-template" data-math="latex-template" data-template="${escapeAttr(template)}"><span class="math-generic-command-label" contenteditable="false">${escapeHtml(commandLabel(label))}</span>${slots}</span>`
 }
 
-function matrixHtml(env: string, rows: string[][], focusFirstCell = false): string {
+function matrixHtml(env: string, rows: string[][], focusFirstCell = false, columnSpec?: string, hasDottedLines = false): string {
   const delimiters: Record<string, [string, string]> = {
     matrix: ['', ''],
     pmatrix: ['(', ')'],
@@ -894,8 +936,10 @@ function matrixHtml(env: string, rows: string[][], focusFirstCell = false): stri
     vmatrix: ['|', '|'],
     Bmatrix: ['{', '}'],
     Vmatrix: ['\u2016', '\u2016'],
+    smallmatrix: ['', ''],
+    array: ['', ''],
   }
-  const [left, right] = delimiters[env] ?? delimiters.pmatrix
+  const [left, right] = delimiters[env] ?? delimiters.matrix
   const body = rows
     .map((row, rowIndex) => (
       `<tr>${row
@@ -903,8 +947,22 @@ function matrixHtml(env: string, rows: string[][], focusFirstCell = false): stri
         .join('')}</tr>`
     ))
     .join('')
+  const columnSpecAttribute = env === 'array' ? ` data-column-spec="${escapeAttr(columnSpec ?? '')}"` : ''
+  const dottedLinesAttribute = hasDottedLines ? ' data-grid-lines="dotted"' : ''
 
-  return `<span class="math-matrix" data-math="matrix" data-env="${escapeAttr(env)}"><span class="math-delimiter-mark">${escapeHtml(left)}</span><table><tbody>${body}</tbody></table><span class="math-delimiter-mark">${escapeHtml(right)}</span></span>`
+  return `<span class="math-matrix" data-math="matrix" data-env="${escapeAttr(env)}"${columnSpecAttribute}${dottedLinesAttribute}><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(left)}</span><table><tbody>${body}</tbody></table><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(right)}</span></span>`
+}
+
+function casesHtml(env: 'cases' | 'rcases', rows: Array<{ value: string; condition: string }>, focusFirstCell = false): string {
+  const left = env === 'cases' ? '{' : ''
+  const right = env === 'rcases' ? '}' : ''
+  const body = rows
+    .map((row, rowIndex) => (
+      `<tr><td>${slotHtml('case-value', row.value, focusFirstCell && rowIndex === 0)}</td><td><span class="math-cases-condition"><span class="math-cases-if" contenteditable="false">if</span>${slotHtml('case-condition', row.condition)}</span></td></tr>`
+    ))
+    .join('')
+
+  return `<span class="math-cases" data-math="cases" data-env="${escapeAttr(env)}"><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(left)}</span><table><tbody>${body}</tbody></table><span class="math-delimiter-mark" contenteditable="false">${escapeHtml(right)}</span></span>`
 }
 
 function findMatchingBrace(source: string, openIndex: number): number {
@@ -1035,23 +1093,74 @@ function tryRenderModExpression(source: string, index: number): { html: string; 
 
 function splitMatrixRows(body: string): string[][] {
   return body
+    .replace(/\\hdashline\b/g, '')
     .split(/\\\\/)
     .map((row) => row.split('&').map((cell) => renderLatexToHtml(cell.trim())))
     .filter((row) => row.length > 0)
 }
 
-function tryRenderMatrix(source: string, index: number): { html: string; end: number } | null {
-  const begin = source.slice(index).match(/^\\begin\{([^}]+)\}/)
-  if (!begin || !MATRIX_ENVS.has(begin[1])) return null
+function renderCaseCondition(condition: string): string {
+  const source = condition.trim()
+  if (!source.startsWith('\\text')) return renderLatexToHtml(source)
 
-  const env = begin[1]
+  const { end } = readCommand(source, 0)
+  const textGroup = readGroupAfterSpaces(source, end)
+  if (!textGroup) return renderLatexToHtml(source)
+
+  const text = textGroup.body.trimStart()
+  if (text !== 'if' && !text.startsWith('if ')) return renderLatexToHtml(source)
+
+  return renderLatexToHtml(source.slice(textGroup.end).trim())
+}
+
+function splitCasesRows(body: string): Array<{ value: string; condition: string }> {
+  return body
+    .split(/\\\\/)
+    .map((row) => {
+      const [value = '', ...conditionParts] = row.split('&')
+      return {
+        value: renderLatexToHtml(value.trim()),
+        condition: renderCaseCondition(conditionParts.join('&')),
+      }
+    })
+}
+
+function tryRenderCases(source: string, index: number): { html: string; end: number } | null {
+  const begin = source.slice(index).match(/^\\begin\{(cases|rcases)\}/)
+  if (!begin) return null
+
+  const env = begin[1] as 'cases' | 'rcases'
   const bodyStart = index + begin[0].length
   const endToken = `\\end{${env}}`
   const bodyEnd = source.indexOf(endToken, bodyStart)
   if (bodyEnd < 0) return null
 
-  const rows = splitMatrixRows(source.slice(bodyStart, bodyEnd))
-  return { html: matrixHtml(env, rows.length ? rows : [['']]), end: bodyEnd + endToken.length }
+  const rows = splitCasesRows(source.slice(bodyStart, bodyEnd))
+  return { html: casesHtml(env, rows.length ? rows : [{ value: '', condition: '' }]), end: bodyEnd + endToken.length }
+}
+
+function tryRenderMatrix(source: string, index: number): { html: string; end: number } | null {
+  const begin = source.slice(index).match(/^\\begin\{([^}]+)\}/)
+  if (!begin || (!MATRIX_ENVS.has(begin[1]) && begin[1] !== 'array')) return null
+
+  const env = begin[1]
+  let bodyStart = index + begin[0].length
+  let columnSpec: string | undefined
+  if (env === 'array') {
+    const spec = readGroupAfterSpaces(source, bodyStart)
+    if (!spec) return null
+    columnSpec = spec.body
+    bodyStart = spec.end
+  }
+
+  const endToken = `\\end{${env}}`
+  const bodyEnd = source.indexOf(endToken, bodyStart)
+  if (bodyEnd < 0) return null
+
+  const body = source.slice(bodyStart, bodyEnd)
+  const hasDottedLines = env === 'array' && (Boolean(columnSpec?.includes(':')) || /\\hdashline\b/.test(body))
+  const rows = splitMatrixRows(body)
+  return { html: matrixHtml(env, rows.length ? rows : [['']], false, columnSpec, hasDottedLines), end: bodyEnd + endToken.length }
 }
 
 function tryRenderGenericEnvironment(source: string, index: number): { html: string; end: number } | null {
@@ -1215,7 +1324,8 @@ function renderSizedDelimiter(source: string, index: number): { html: string; en
   }
 }
 
-function renderLatexToHtml(latex: string): string {
+// eslint-disable-next-line react-refresh/only-export-components
+export function renderLatexToHtml(latex: string): string {
   const source = latex.replace(/#\?/g, '')
   let html = ''
   let index = 0
@@ -1225,6 +1335,13 @@ function renderLatexToHtml(latex: string): string {
     if (matrix) {
       html += matrix.html
       index = matrix.end
+      continue
+    }
+
+    const cases = tryRenderCases(source, index)
+    if (cases) {
+      html += cases.html
+      index = cases.end
       continue
     }
 
@@ -1410,10 +1527,10 @@ function renderLatexToHtml(latex: string): string {
         }
       }
 
-      if (command === '\\overbrace' || command === '\\underbrace') {
+      if (command === '\\overbrace' || command === '\\underbrace' || command === '\\overbracket') {
         const body = readGroupAfterSpaces(source, end)
         if (body) {
-          const scriptToken = command === '\\overbrace' ? '^' : '_'
+          const scriptToken = command === '\\underbrace' ? '_' : '^'
           const scriptStart = skipSpaces(source, body.end)
           const annotation = source[scriptStart] === scriptToken
             ? readGroupOrToken(source, skipSpaces(source, scriptStart + 1))
@@ -1421,7 +1538,7 @@ function renderLatexToHtml(latex: string): string {
           html += braceAccentHtml(
             command,
             renderSlotLatex(body.body),
-            annotation ? renderSlotLatex(annotation.body) : '',
+            annotation ? renderSlotLatex(annotation.body) : undefined,
           )
           index = annotation?.end ?? body.end
           continue
@@ -1449,6 +1566,16 @@ function renderLatexToHtml(latex: string): string {
         html += formatHtml(HEADING_COMMANDS[command], renderLatexToHtml(rawBody))
         index = source.length
         continue
+      }
+
+      if (command === '\\href') {
+        const url = readGroupAfterSpaces(source, end)
+        const body = url ? readGroupAfterSpaces(source, url.end) : null
+        if (url && body) {
+          html += linkHtml(url.body, renderLatexToHtml(body.body))
+          index = body.end
+          continue
+        }
       }
 
       const genericCommand = tryRenderGenericCommand(source, command, end)
@@ -1532,6 +1659,168 @@ function renderLatexToHtml(latex: string): string {
   return html
 }
 
+function unwrapPastedLatex(value: string): string | null {
+  const trimmed = value.trim()
+  const wrappers: Array<[string, string]> = [
+    ['$$', '$$'],
+    ['\\[', '\\]'],
+    ['\\(', '\\)'],
+  ]
+
+  for (const [open, close] of wrappers) {
+    if (trimmed.startsWith(open) && trimmed.endsWith(close) && trimmed.length > open.length + close.length) {
+      return trimmed.slice(open.length, trimmed.length - close.length).trim()
+    }
+  }
+
+  if (
+    trimmed.startsWith('$')
+    && trimmed.endsWith('$')
+    && !trimmed.startsWith('$$')
+    && !trimmed.endsWith('$$$')
+    && trimmed.length > 2
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+
+  return null
+}
+
+function isKnownLatexCommand(command: string): boolean {
+  return Boolean(
+    COMMAND_DISPLAY[command]
+    || LATEX_COMMAND_PREVIEWS[command]
+    || INLINE_FORMAT_COMMANDS[command]
+    || HEADING_COMMANDS[command]
+    || ACCENT_COMMANDS[command]
+    || GENERIC_COMMAND_ARG_SPECS[command]
+    || VISUAL_FUNCTION_COMMANDS.has(command)
+    || CANCEL_COMMANDS.has(command)
+    || X_ARROW_DISPLAYS[command]
+    || LITERAL_LATEX_COMMANDS.has(command)
+    || [
+      '\\\\',
+      '\\newline',
+      '\\begin',
+      '\\end',
+      '\\left',
+      '\\right',
+      '\\frac',
+      '\\dfrac',
+      '\\tfrac',
+      '\\binom',
+      '\\sqrt',
+      '\\text',
+      '\\boxed',
+      '\\stackrel',
+      '\\phantom',
+      '\\hphantom',
+      '\\vphantom',
+      '\\hspace',
+      '\\hspace*',
+      '\\operatorname',
+      '\\operatorname*',
+      '\\operatornamewithlimits',
+      '\\phase',
+      '\\angln',
+      '\\overbrace',
+      '\\underbrace',
+      '\\overbracket',
+      '\\overset',
+      '\\underset',
+      '\\mod',
+      '\\pmod',
+      '\\pod',
+    ].includes(command)
+  )
+}
+
+function pastedTextAsLatexSource(text: string): string | null {
+  const normalized = text.replace(/\r\n?/g, '\n')
+  const wrapped = unwrapPastedLatex(normalized)
+  if (wrapped !== null) return wrapped
+
+  const trimmed = normalized.trim()
+  if (!trimmed) return null
+
+  if (/\\(?:begin|end)\s*\{[^}]+\}/.test(trimmed)) return trimmed
+  if (/(?:^|[^\w])(?:[A-Za-z0-9)\]}]|\\[a-zA-Z@]+\*?)\s*[\^_]\s*(?:\{[^}]+\}|\\[a-zA-Z@]+\*?|[A-Za-z0-9])/.test(trimmed)) {
+    return trimmed
+  }
+
+  for (const match of trimmed.matchAll(/\\[a-zA-Z@]+\*?|\\./g)) {
+    const command = match[0]
+    if (isKnownLatexCommand(command)) return trimmed
+
+    const afterCommand = trimmed.slice((match.index ?? 0) + command.length)
+    if (/^\s*(?:\{|\[|_|\^)/.test(afterCommand)) return trimmed
+  }
+
+  return null
+}
+
+function splitLatexRowsAtBreaks(latex: string): string[] {
+  const rows: string[] = []
+  let braceDepth = 0
+  let environmentDepth = 0
+  let rowStart = 0
+  let index = 0
+
+  while (index < latex.length) {
+    const char = latex[index]
+
+    if (char === '\\') {
+      const { command, end } = readCommand(latex, index)
+
+      if ((command === '\\begin' || command === '\\end') && braceDepth === 0) {
+        const group = readGroupAfterSpaces(latex, end)
+        if (group) {
+          environmentDepth = Math.max(0, environmentDepth + (command === '\\begin' ? 1 : -1))
+          index = group.end
+          continue
+        }
+      }
+
+      if ((command === '\\\\' || command === '\\newline') && braceDepth === 0 && environmentDepth === 0) {
+        const optionalSpacing = command === '\\\\' ? readBracketGroupAfterSpaces(latex, end) : null
+        const rowEnd = optionalSpacing?.end ?? end
+        rows.push(latex.slice(rowStart, index).trim())
+        rowStart = rowEnd
+        index = rowEnd
+        continue
+      }
+
+      index = end
+      continue
+    }
+
+    if (char === '{') {
+      braceDepth += 1
+    } else if (char === '}') {
+      braceDepth = Math.max(0, braceDepth - 1)
+    }
+
+    index += 1
+  }
+
+  rows.push(latex.slice(rowStart).trim())
+  while (rows.length > 1 && rows[rows.length - 1] === '') rows.pop()
+  return rows
+}
+
+function insertPastedTextAtSelection(root: HTMLElement, text: string): string[] {
+  const latex = pastedTextAsLatexSource(text)
+  if (latex !== null) {
+    const rows = splitLatexRowsAtBreaks(latex)
+    const currentRow = rows[0] ?? ''
+    insertHtmlAtSelection(root, `${renderLatexToHtml(currentRow)}<span data-caret-marker="true"></span>`)
+    return rows.slice(1)
+  }
+
+  insertPlainTextAtSelection(root, text)
+  return []
+}
+
 function serializeChildren(node: Node): string {
   return Array.from(node.childNodes).map(serializeNode).join('')
 }
@@ -1577,6 +1866,11 @@ function serializeNode(node: Node): string {
     return `${open}${serializeChildren(node).trim() || ' '}${close}`
   }
 
+  const linkUrl = node.dataset.linkUrl
+  if (linkUrl) {
+    return `\\href{${escapeHrefLatex(linkUrl)}}{${serializeChildren(node).trim() || linkUrl}}`
+  }
+
   const listKind = node.dataset.list as TextFormatCommand | undefined
   if (listKind === 'bulletList' || listKind === 'numberedList') {
     const [open, close] = LATEX_INLINE_FORMATS[listKind]
@@ -1590,7 +1884,11 @@ function serializeNode(node: Node): string {
   }
 
   const symbolLatex = node.dataset.latex
-  if (symbolLatex) return isFunctionArgSlot(node.nextSibling) ? symbolLatex : `${symbolLatex} `
+  if (symbolLatex) {
+    return isFunctionArgSlot(node.nextSibling) || LITERAL_LATEX_COMMANDS.has(symbolLatex)
+      ? symbolLatex
+      : `${symbolLatex} `
+  }
 
   if (node.dataset.slot === 'function-arg') {
     return `{${serializeChildren(node).trim() || ' '}}`
@@ -1619,6 +1917,19 @@ function serializeNode(node: Node): string {
       return kind === 'optional' ? `[${value}]` : `{${value}}`
     }).join('')
     return `\\begin{${env}}${args}${serializeDirectSlot(node, 'environment-body', false)}\\end{${env}}`
+  }
+
+  if (mathKind === 'cases') {
+    const env = node.dataset.env === 'rcases' ? 'rcases' : 'cases'
+    const table = Array.from(node.children).find((child) => child instanceof HTMLTableElement)
+    const rows = Array.from(table?.tBodies[0]?.rows ?? []).map((row) => {
+      const valueSlot = row.cells[0]?.querySelector<HTMLElement>(':scope > [data-slot="case-value"]')
+      const conditionSlot = row.cells[1]?.querySelector<HTMLElement>('[data-slot="case-condition"]')
+      const value = valueSlot ? serializeChildren(valueSlot).trim() || ' ' : ' '
+      const condition = conditionSlot ? serializeChildren(conditionSlot).trim() || ' ' : ' '
+      return `${value} &\\text{if } ${condition}`
+    })
+    return `\\begin{${env}}${rows.join(' \\\\ ')}\\end{${env}}`
   }
 
   if (mathKind === 'latex-template') {
@@ -1720,10 +2031,14 @@ function serializeNode(node: Node): string {
   if (mathKind === 'brace-accent') {
     const command = node.dataset.command
     const body = serializeDirectSlot(node, 'body') || ' '
-    const annotation = serializeDirectSlot(node, 'annotation') || ' '
-    return command === '\\underbrace'
-      ? `\\underbrace{${body}}_{${annotation}}`
-      : `\\overbrace{${body}}^{${annotation}}`
+    const annotationSlot = directSlot(node, 'annotation')
+    const commandName = command === '\\overbracket' ? '\\overbracket' : command === '\\underbrace' ? '\\underbrace' : '\\overbrace'
+    if (!annotationSlot) return `${commandName}{${body}}`
+
+    const annotation = serializeChildren(annotationSlot).trim() || ' '
+    return commandName === '\\underbrace'
+      ? `${commandName}{${body}}_{${annotation}}`
+      : `${commandName}{${body}}^{${annotation}}`
   }
 
   if (mathKind === 'mod-expression') {
@@ -1769,7 +2084,14 @@ function serializeNode(node: Node): string {
         return matrixSlot ? serializeChildren(matrixSlot).trim() || ' ' : ' '
       }).join(' & ')
     ))
-    return `\\begin{${env}}${rows.join(' \\\\ ')}\\end{${env}}`
+    const hasDottedLines = env === 'array' && node.dataset.gridLines === 'dotted'
+    const columnSpec = env === 'array'
+      ? `{${node.dataset.columnSpec || (hasDottedLines
+        ? Array.from({ length: Math.max(table?.tBodies[0]?.rows[0]?.cells.length ?? 1, 1) }, () => 'c').join(':')
+        : 'c'.repeat(Math.max(table?.tBodies[0]?.rows[0]?.cells.length ?? 1, 1)))}}`
+      : ''
+    const rowSeparator = hasDottedLines ? ' \\\\ \\hdashline ' : ' \\\\ '
+    return `\\begin{${env}}${columnSpec}${rows.join(rowSeparator)}\\end{${env}}`
   }
 
   return serializeChildren(node)
@@ -1808,7 +2130,8 @@ function getLatexSourceSnippet(snippet: string, mode: InsertMode = 'write', sele
 function focusFirstSlotInHtml(html: string): string {
   const template = document.createElement('template')
   template.innerHTML = html
-  const slot = template.content.querySelector('.math-slot')
+  const slots = Array.from(template.content.querySelectorAll<HTMLElement>('.math-slot'))
+  const slot = slots.find((candidate) => !candidate.querySelector('.math-slot')) ?? slots[0]
   if (!slot) return `${html}<span data-caret-marker="true"></span>`
   slot.insertAdjacentHTML('afterbegin', '<span data-caret-marker="true"></span>')
   return Array.from(template.content.childNodes)
@@ -2016,6 +2339,12 @@ function placeCaretFromMarker(root: HTMLElement): void {
   if (!marker || !selection || !marker.parentNode) return
 
   const parent = marker.parentNode
+  if (parent instanceof HTMLElement && parent.classList.contains('math-slot') && parent.childNodes.length === 1) {
+    marker.remove()
+    placeCaretInNode(parent)
+    return
+  }
+
   const range = document.createRange()
   range.setStart(parent, Array.from(parent.childNodes).indexOf(marker))
   range.collapse(true)
@@ -2380,6 +2709,11 @@ function collectTabTraversalEntries(node: Node, root: HTMLElement, entries: TabT
   if (isListMarkerElement(node)) return
 
   if (node.classList.contains('math-slot')) {
+    if (node.querySelector('.math-slot')) {
+      node.childNodes.forEach((child) => collectTabTraversalEntries(child, root, entries))
+      return
+    }
+
     entries.push({ kind: 'slot', element: node, edge: 'start' })
     if (slotHasTabbableContent(node)) entries.push({ kind: 'slot', element: node, edge: 'end' })
     return
@@ -2691,6 +3025,12 @@ function placeCaretForMathPointer(
     return placeCaretFromPoint(root, event, slot) || (root.focus(), placeCaretInNode(slot, true), true)
   }
 
+  const matrixCell = event.target.closest<HTMLTableCellElement>('.math-matrix td')
+  const matrixCellSlot = matrixCell?.querySelector<HTMLElement>(':scope > [data-slot="matrix-cell"]')
+  if (matrixCellSlot && mathElement.contains(matrixCellSlot)) {
+    return placeCaretFromPoint(root, event, matrixCellSlot) || (root.focus(), placeCaretInNode(matrixCellSlot, true), true)
+  }
+
   const delimiterMark = event.target.closest<HTMLElement>('.math-delimiter-mark')
   const mathRect = mathElement.getBoundingClientRect()
   if (delimiterMark || event.clientX <= mathRect.left + 2 || event.clientX >= mathRect.right - 2) {
@@ -2942,6 +3282,17 @@ function applyFormatToLatexSource(textarea: HTMLTextAreaElement | null, currentL
   return { latex, cursor: start + open.length + body.length }
 }
 
+function applyLinkToLatexSource(textarea: HTMLTextAreaElement | null, currentLatex: string, url: string): { latex: string; cursor: number } {
+  const start = textarea?.selectionStart ?? 0
+  const end = textarea?.selectionEnd ?? currentLatex.length
+  const selected = currentLatex.slice(start, end)
+  const body = selected || 'link'
+  const open = `\\href{${escapeHrefLatex(url)}}{`
+  const close = '}'
+  const latex = `${currentLatex.slice(0, start)}${open}${body}${close}${currentLatex.slice(end)}`
+  return { latex, cursor: start + open.length + body.length }
+}
+
 function applyFormatToVisualEditor(root: HTMLElement, format: TextFormatCommand, number = 1): void {
   root.focus()
   if (!selectionIsInside(root)) focusAtEnd(root)
@@ -2982,6 +3333,41 @@ function applyFormatToVisualEditor(root: HTMLElement, format: TextFormatCommand,
   }
 }
 
+function applyLinkToVisualEditor(root: HTMLElement, url: string): void {
+  root.focus()
+  if (!selectionIsInside(root)) focusAtEnd(root)
+  normalizeSelectionAroundMathElements(root)
+
+  const selection = window.getSelection()
+  const range = selection && selection.rangeCount > 0 && root.contains(selection.anchorNode) ? selection.getRangeAt(0) : null
+  if (range && !range.collapsed) {
+    const wrapper = document.createElement('span')
+    wrapper.className = 'text-link'
+    wrapper.dataset.linkUrl = url
+    wrapper.appendChild(range.extractContents())
+    range.insertNode(wrapper)
+    placeCaretAfterNode(wrapper)
+    return
+  }
+
+  const hasContent = serializeEditor(root).length > 0
+  if (hasContent) {
+    root.innerHTML = linkHtml(url, root.innerHTML)
+    focusAtEnd(root)
+  } else {
+    insertHtmlAtSelection(root, linkHtml(url, 'link', true))
+  }
+}
+
+function linkElementFromTarget(target: EventTarget | null): HTMLElement | null {
+  return target instanceof HTMLElement ? target.closest<HTMLElement>('.text-link') : null
+}
+
+function normalizeHrefForView(url: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url
+  return `https://${url}`
+}
+
 export function CellEditor({
   cell,
   isActive,
@@ -2993,6 +3379,7 @@ export function CellEditor({
   onSelectionRestoreComplete,
   onAddCellAbove,
   onAddCellBelow,
+  onAddCellsBelow,
   onDeleteCell,
   rowListKind = null,
   numberedListValue,
@@ -3003,6 +3390,7 @@ export function CellEditor({
 }: CellEditorProps) {
   const visualEditorRef = useRef<HTMLDivElement | null>(null)
   const latexTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const linkPopoverRef = useRef<HTMLDivElement | null>(null)
   const lastSyncedLatexRef = useRef(cell.latex || '')
   const cellRef = useRef(cell)
   const onActivateRef = useRef(onActivate)
@@ -3011,6 +3399,7 @@ export function CellEditor({
   const onSelectionRestoreCompleteRef = useRef(onSelectionRestoreComplete)
   const onAddCellAboveRef = useRef(onAddCellAbove)
   const onAddCellBelowRef = useRef(onAddCellBelow)
+  const onAddCellsBelowRef = useRef(onAddCellsBelow)
   const onDeleteCellRef = useRef(onDeleteCell)
   const onContinueNumberingRef = useRef(onContinueNumbering)
   const onFocusPreviousRef = useRef(onFocusPrevious)
@@ -3019,6 +3408,14 @@ export function CellEditor({
   const selectionPreviewFrameRef = useRef<number | null>(null)
   const selectionBeforeInputRef = useRef<EditorSelectionState | null>(null)
   const [listContextMenu, setListContextMenu] = useState<{ top: number; left: number } | null>(null)
+  const [linkPopover, setLinkPopover] = useState<{
+    top: number
+    left: number
+    url: string
+    draftUrl: string
+    element: HTMLElement
+    isEditing: boolean
+  } | null>(null)
 
   cellRef.current = cell
   onActivateRef.current = onActivate
@@ -3027,6 +3424,7 @@ export function CellEditor({
   onSelectionRestoreCompleteRef.current = onSelectionRestoreComplete
   onAddCellAboveRef.current = onAddCellAbove
   onAddCellBelowRef.current = onAddCellBelow
+  onAddCellsBelowRef.current = onAddCellsBelow
   onDeleteCellRef.current = onDeleteCell
   onContinueNumberingRef.current = onContinueNumbering
   onFocusPreviousRef.current = onFocusPrevious
@@ -3112,6 +3510,19 @@ export function CellEditor({
     })
   }, [getSelectionState])
 
+  const linkLatexSource = useCallback((url: string) => {
+    const currentCell = cellRef.current
+    const selectionBefore = getSelectionState()
+    const { latex, cursor } = applyLinkToLatexSource(latexTextareaRef.current, currentCell.latex || '', url)
+    lastSyncedLatexRef.current = latex
+    onChangeRef.current({ ...currentCell, latex }, { kind: 'format', selectionBefore })
+
+    window.requestAnimationFrame(() => {
+      latexTextareaRef.current?.focus()
+      latexTextareaRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }, [getSelectionState])
+
   const formatVisualEditor = useCallback((format: TextFormatCommand) => {
     const editor = visualEditorRef.current
     if (!editor) return
@@ -3121,6 +3532,30 @@ export function CellEditor({
     applyFormatToVisualEditor(editor, format, numberedListValue ?? 1)
     commitVisualEditor({ kind: 'format', selectionBefore })
   }, [commitVisualEditor, numberedListValue])
+
+  const linkVisualEditor = useCallback((url: string) => {
+    const editor = visualEditorRef.current
+    if (!editor) return
+
+    onActivateRef.current()
+    const selectionBefore = visualSelectionState(editor)
+    applyLinkToVisualEditor(editor, url)
+    commitVisualEditor({ kind: 'format', selectionBefore })
+  }, [commitVisualEditor])
+
+  const updateVisibleLinkUrl = useCallback((url: string) => {
+    const editor = visualEditorRef.current
+    if (!editor || !linkPopover?.element || !editor.contains(linkPopover.element)) return
+
+    const selectionBefore = visualSelectionState(editor)
+    linkPopover.element.dataset.linkUrl = url
+    commitVisualEditor({ kind: 'format', selectionBefore })
+    setLinkPopover((current) => current ? { ...current, url, draftUrl: url, isEditing: false } : current)
+  }, [commitVisualEditor, linkPopover])
+
+  const viewVisibleLink = useCallback((url: string) => {
+    window.open(normalizeHrefForView(url), '_blank', 'noopener,noreferrer')
+  }, [])
 
   const getCurrentLatex = useCallback(() => {
     if (viewMode === 'latex') return latexTextareaRef.current?.value ?? cellRef.current.latex ?? ''
@@ -3141,6 +3576,7 @@ export function CellEditor({
       onInsertHandleRef.current({
         insert: insertIntoLatexSource,
         format: formatLatexSource,
+        link: linkLatexSource,
         getLatex: getCurrentLatex,
         getSelection: getSelectionState,
         restoreSelection: restoreSelectionState,
@@ -3152,12 +3588,13 @@ export function CellEditor({
     onInsertHandleRef.current({
       insert: insertIntoVisualEditor,
       format: formatVisualEditor,
+      link: linkVisualEditor,
       getLatex: getCurrentLatex,
       getSelection: getSelectionState,
       restoreSelection: restoreSelectionState,
       focus: () => visualEditorRef.current?.focus(),
     })
-  }, [formatLatexSource, formatVisualEditor, getCurrentLatex, getSelectionState, insertIntoLatexSource, insertIntoVisualEditor, restoreSelectionState, viewMode])
+  }, [formatLatexSource, formatVisualEditor, getCurrentLatex, getSelectionState, insertIntoLatexSource, insertIntoVisualEditor, linkLatexSource, linkVisualEditor, restoreSelectionState, viewMode])
 
   useEffect(() => {
     syncHandle()
@@ -3194,6 +3631,77 @@ export function CellEditor({
 
     return () => window.cancelAnimationFrame(frame)
   }, [isActive, pendingSelectionRestore, restoreSelectionState])
+
+  useEffect(() => {
+    if (!linkPopover) return undefined
+
+    const closeLinkPopover = () => setLinkPopover(null)
+    const targetNode = (target: EventTarget | null) => target instanceof Node ? target : null
+    const pointInRect = (rect: DOMRect, clientX: number, clientY: number, margin = 0) => (
+      clientX >= rect.left - margin
+      && clientX <= rect.right + margin
+      && clientY >= rect.top - margin
+      && clientY <= rect.bottom + margin
+    )
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = targetNode(event.target)
+      if (!target) {
+        closeLinkPopover()
+        return
+      }
+
+      if (linkPopoverRef.current?.contains(target) || linkPopover.element.contains(target)) return
+      closeLinkPopover()
+    }
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = targetNode(event.target)
+      if (target && linkPopoverRef.current?.contains(target)) return
+      closeLinkPopover()
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (linkPopover.isEditing) return
+      const popover = linkPopoverRef.current
+      if (!popover || !linkPopover.element.isConnected) {
+        closeLinkPopover()
+        return
+      }
+
+      const margin = 12
+      if (
+        pointInRect(popover.getBoundingClientRect(), event.clientX, event.clientY, margin)
+        || pointInRect(linkPopover.element.getBoundingClientRect(), event.clientX, event.clientY, margin)
+      ) {
+        return
+      }
+
+      closeLinkPopover()
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeLinkPopover()
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('focusin', handleFocusIn, true)
+    document.addEventListener('pointermove', handlePointerMove, true)
+    document.addEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('scroll', closeLinkPopover, true)
+    window.addEventListener('resize', closeLinkPopover)
+    window.addEventListener('blur', closeLinkPopover)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('focusin', handleFocusIn, true)
+      document.removeEventListener('pointermove', handlePointerMove, true)
+      document.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('scroll', closeLinkPopover, true)
+      window.removeEventListener('resize', closeLinkPopover)
+      window.removeEventListener('blur', closeLinkPopover)
+    }
+  }, [linkPopover])
 
   useEffect(() => {
     const editor = visualEditorRef.current
@@ -3299,6 +3807,10 @@ export function CellEditor({
     <div
       className={`cell-editor${isActive ? ' cell-editor-active' : ''}`}
       onPointerDown={(event) => {
+        const target = event.target instanceof HTMLElement ? event.target : null
+        if (!target?.closest('.link-popover')) {
+          setLinkPopover(null)
+        }
         setListContextMenu(null)
         onActivate()
         if (viewMode === 'wysiwyg' && event.target === event.currentTarget) {
@@ -3403,9 +3915,23 @@ export function CellEditor({
                 return
               }
 
+              const linkElement = linkElementFromTarget(target)
+              if (linkElement?.dataset.linkUrl) {
+                const rect = linkElement.getBoundingClientRect()
+                setLinkPopover({
+                  top: rect.bottom + 6,
+                  left: Math.max(8, Math.min(rect.left, window.innerWidth - 320)),
+                  url: linkElement.dataset.linkUrl,
+                  draftUrl: linkElement.dataset.linkUrl,
+                  element: linkElement,
+                  isEditing: false,
+                })
+                return
+              }
+
               if (
-                !placeCaretForRowBoundaryPointer(editor, { clientX, clientY }) &&
                 !placeCaretForMathPointer(editor, { clientX, clientY, target }) &&
+                !placeCaretForRowBoundaryPointer(editor, { clientX, clientY }) &&
                 !placeCaretForCommandPointer(editor, { clientX, target }) &&
                 !placeCaretForStandaloneSlotPointer(editor, { clientX, clientY, target })
               ) {
@@ -3429,11 +3955,66 @@ export function CellEditor({
           onPaste={(event) => {
             event.preventDefault()
             const selectionBefore = visualSelectionState(event.currentTarget)
-            insertPlainTextAtSelection(event.currentTarget, event.clipboardData.getData('text/plain'))
+            const additionalLatexRows = insertPastedTextAtSelection(event.currentTarget, event.clipboardData.getData('text/plain'))
             commitVisualEditor({ kind: 'paste', selectionBefore, inputType: 'insertFromPaste' })
+            if (additionalLatexRows.length > 0) {
+              onAddCellsBelowRef.current(additionalLatexRows)
+            }
           }}
         />
       )}
+      {linkPopover ? (
+        <div
+          ref={linkPopoverRef}
+          className="link-popover"
+          style={{ top: linkPopover.top, left: linkPopover.left }}
+          onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {linkPopover.isEditing ? (
+            <form
+              className="link-popover-edit"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const nextUrl = linkPopover.draftUrl.trim()
+                if (nextUrl) updateVisibleLinkUrl(nextUrl)
+              }}
+            >
+              <input
+                className="link-popover-inline-input"
+                autoFocus
+                value={linkPopover.draftUrl}
+                aria-label="Hyperlink URL"
+                onChange={(event) => setLinkPopover((current) => current ? { ...current, draftUrl: event.target.value } : current)}
+              />
+              <button type="submit" className="link-popover-button link-popover-button-primary" disabled={!linkPopover.draftUrl.trim()}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="link-popover-button"
+                onClick={() => setLinkPopover((current) => current ? { ...current, draftUrl: current.url, isEditing: false } : current)}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <>
+              <span className="link-popover-url">{linkPopover.url}</span>
+              <button
+                type="button"
+                className="link-popover-button"
+                onClick={() => setLinkPopover((current) => current ? { ...current, isEditing: true } : current)}
+              >
+                Edit
+              </button>
+              <button type="button" className="link-popover-button link-popover-button-primary" onClick={() => viewVisibleLink(linkPopover.url)}>
+                View
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
       {listContextMenu ? (
         <div className="list-context-menu" style={{ top: listContextMenu.top, left: listContextMenu.left }}>
           <button

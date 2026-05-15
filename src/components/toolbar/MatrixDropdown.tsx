@@ -27,6 +27,7 @@ interface MatrixEnvironmentOption {
   preview: string
   description: string
   usesCustomDelimiters?: boolean
+  usesDottedLines?: boolean
 }
 
 const MATRIX_DELIMITERS: MatrixDelimiterOption[] = [
@@ -70,6 +71,7 @@ const MATRIX_ENVIRONMENTS: MatrixEnvironmentOption[] = [
   { id: 'Bmatrix', label: 'Bmatrix', env: 'Bmatrix', preview: '{A}', description: 'Matrix with curly braces' },
   { id: 'smallmatrix', label: 'smallmatrix', env: 'smallmatrix', preview: 'a b', description: 'Compact inline matrix' },
   { id: 'array', label: 'array', env: 'array', preview: 'A:B', description: 'Column-aligned array with column spec' },
+  { id: 'dotted-array', label: 'dotted', env: 'array', preview: 'A:B', description: 'Array with dotted cell dividers', usesDottedLines: true },
 ]
 
 function parsedDimension(value: number | string): number {
@@ -100,9 +102,15 @@ export function MatrixDropdown({ disabled, onInsertSnippet }: MatrixDropdownProp
 
   const generateMatrixLatex = (rows: number, cols: number) => {
     const row = Array.from({ length: cols }, () => '#?').join(' & ')
-    const body = Array.from({ length: rows }, () => row).join(' \\\\ ')
     const environment = MATRIX_ENVIRONMENTS.find((option) => option.id === environmentId) ?? MATRIX_ENVIRONMENTS[0]
 
+    if (environment.usesDottedLines) {
+      const columnSpec = Array.from({ length: Math.max(cols, 1) }, () => 'c').join(':')
+      const body = Array.from({ length: rows }, () => row).join(' \\\\ \\hdashline ')
+      return `\\begin{array}{${columnSpec}} ${body} \\end{array}`
+    }
+
+    const body = Array.from({ length: rows }, () => row).join(' \\\\ ')
     if (environment.env === 'array') {
       const columnSpec = 'c'.repeat(Math.max(cols, 1))
       return `\\begin{array}{${columnSpec}} ${body} \\end{array}`
