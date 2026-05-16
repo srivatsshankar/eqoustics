@@ -30,8 +30,8 @@ A Notion-style WYSIWYG math notebook editor with speech-to-LaTeX dictation. Writ
 |---|---|
 | Shell | Electron |
 | UI | React + TypeScript |
-| Math rendering | 
-| Speech model | `google/gemma-4-E4B-it` (multimodal) |
+| Math rendering | Custom |
+| Speech model | `google/gemma-4-E2B-it` & `google/gemma-4-E4B-it` (multimodal) |
 | File format | LaTeX (`.tex`) |
 | Build | Vite + electron-builder |
 
