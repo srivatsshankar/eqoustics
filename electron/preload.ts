@@ -1,7 +1,16 @@
 import { clipboard, contextBridge, ipcRenderer, nativeImage } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc/channels'
-import type { FileMenuAction, WindowControlAction, WindowStatePayload } from '../src/shared/ipc/channels'
+import type {
+  FileMenuAction,
+  AppSettingsPayload,
+  AppSettingsUpdatePayload,
+  SpeechAudioChunkPayload,
+  SpeechModelStatusPayload,
+  SpeechTranscriptResult,
+  WindowControlAction,
+  WindowStatePayload,
+} from '../src/shared/ipc/channels'
 import type { NotebookDocument, RecentFileEntry, StoredNotebookFile } from '../src/shared/types/notebook'
 
 contextBridge.exposeInMainWorld('eqoustics', {
@@ -34,6 +43,27 @@ contextBridge.exposeInMainWorld('eqoustics', {
   captureHtml: (html: string) => ipcRenderer.invoke(IPC_CHANNELS.captureHtml, html) as Promise<void>,
   writeClipboardText: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.writeClipboardText, text) as Promise<void>,
   writeClipboardImage: (dataUrl: string) => clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)),
+  getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet) as Promise<AppSettingsPayload>,
+  updateSettings: (settings: AppSettingsUpdatePayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.settingsUpdate, settings) as Promise<AppSettingsPayload>
+  },
+  restartApp: () => ipcRenderer.invoke(IPC_CHANNELS.appRestart) as Promise<void>,
+  getSpeechModelStatus: () => ipcRenderer.invoke(IPC_CHANNELS.speechModelGetStatus) as Promise<SpeechModelStatusPayload>,
+  loadSpeechModel: () => ipcRenderer.invoke(IPC_CHANNELS.speechModelLoad) as Promise<SpeechModelStatusPayload>,
+  transcribeSpeechChunk: (payload: SpeechAudioChunkPayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.speechTranscribeChunk, payload) as Promise<SpeechTranscriptResult>
+  },
+  onSpeechModelStatusChange: (listener: (status: SpeechModelStatusPayload) => void) => {
+    const wrappedListener = (_event: unknown, status: SpeechModelStatusPayload) => {
+      listener(status)
+    }
+
+    ipcRenderer.on(IPC_CHANNELS.speechModelStatusChanged, wrappedListener)
+
+    return () => {
+      ipcRenderer.off(IPC_CHANNELS.speechModelStatusChanged, wrappedListener)
+    }
+  },
   windowControl: (action: WindowControlAction) => ipcRenderer.invoke(IPC_CHANNELS.windowControl, action) as Promise<void>,
   getWindowState: () => ipcRenderer.invoke(IPC_CHANNELS.getWindowState) as Promise<WindowStatePayload>,
   onWindowStateChange: (listener: (state: WindowStatePayload) => void) => {

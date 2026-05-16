@@ -9,6 +9,7 @@ import {
 
 import { NotebookEditor } from './components/notebook/NotebookEditor'
 import { CustomScrollbar } from './components/scrollbar/CustomScrollbar'
+import { FloatingSpeechControl } from './components/speech/FloatingSpeechControl'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
 import type { CellChangeKind, CellChangeMetadata, CellInsertHandle, EditorSelectionState, TextFormatCommand } from './components/cell/CellEditor'
 
@@ -17,7 +18,7 @@ import { copyCells, type CopyAsFormat } from './clipboard/editorClipboard'
 import { renderPrintableNotebook } from './print/renderPrintableNotebook'
 import { parseNotebookFromLatex } from './serialization/latexParser'
 import { serializeNotebookToLatex } from './serialization/latexSerializer'
-import type { FileMenuAction } from './shared/ipc/channels'
+import type { AppSettingsPayload, AppSettingsUpdatePayload, FileMenuAction } from './shared/ipc/channels'
 import {
   createNotebookCell,
   type NotebookCell,
@@ -53,6 +54,13 @@ function isDocumentBlank(document: NotebookDocument): boolean {
 const HISTORY_LIMIT = 100
 const TYPING_GROUP_TIMEOUT_MS = 1200
 const TABLE_OF_CONTENTS_OPEN_STORAGE_KEY = 'eqoustics.tableOfContentsOpen'
+
+const FALLBACK_APP_SETTINGS: AppSettingsPayload = {
+  microphoneDeviceId: null,
+  appearance: 'system',
+  speechModelSize: '2b',
+  totalMemoryBytes: 0,
+}
 
 interface HistoryEntry {
   document: NotebookDocument
@@ -171,7 +179,10 @@ function App() {
   const [filePath, setFilePath] = useState<string | null>(null)
   const [isWindowMaximized, setIsWindowMaximized] = useState(false)
   const [isBootstrapped, setIsBootstrapped] = useState(false)
-  const [, setRecentFiles] = useState<RecentFileEntry[]>([])
+  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
+  const [appSettings, setAppSettings] = useState<AppSettingsPayload>(FALLBACK_APP_SETTINGS)
+  const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([])
+  const [isModelRestartRequired, setIsModelRestartRequired] = useState(false)
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
   const [documentRevision, setDocumentRevision] = useState(0)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
@@ -180,6 +191,7 @@ function App() {
   const activeCellHandleRef = useRef<CellInsertHandle | null>(null)
   const typingHistoryGroupRef = useRef<TypingHistoryGroup | null>(null)
   const documentShellRef = useRef<HTMLElement | null>(null)
+  const initialSpeechModelSizeRef = useRef<AppSettingsPayload['speechModelSize']>(FALLBACK_APP_SETTINGS.speechModelSize)
   const [isDirty, setIsDirty] = useState(false)
   const [isTableOfContentsOpen, setIsTableOfContentsOpen] = useState(readStoredTableOfContentsOpen)
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false)
@@ -190,9 +202,14 @@ function App() {
 
   useEffect(() => {
     void (async () => {
-      const recent = await window.eqoustics.listRecentFiles()
+      const [recent, settings] = await Promise.all([
+        window.eqoustics.listRecentFiles(),
+        window.eqoustics.getSettings(),
+      ])
       const nextDocument = await window.eqoustics.createNotebook()
       setRecentFiles(recent)
+      setAppSettings(settings)
+      initialSpeechModelSizeRef.current = settings.speechModelSize
       setDocument(nextDocument)
       setFilePath(null)
       setDocumentRevision((current) => current + 1)
@@ -201,6 +218,39 @@ function App() {
       setIsBootstrapped(true)
     })()
   }, [])
+
+  const refreshMicrophones = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return
+
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    setMicrophones(devices.filter((device) => device.kind === 'audioinput'))
+  }, [])
+
+  useEffect(() => {
+    void refreshMicrophones()
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicrophones)
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', refreshMicrophones)
+    }
+  }, [refreshMicrophones])
+
+  useEffect(() => {
+    const root = window.document.documentElement
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyAppearance = () => {
+      const resolvedAppearance = appSettings.appearance === 'system'
+        ? mediaQuery.matches ? 'dark' : 'light'
+        : appSettings.appearance
+      root.dataset.appearance = resolvedAppearance
+      root.style.colorScheme = resolvedAppearance
+    }
+
+    applyAppearance()
+    if (appSettings.appearance !== 'system') return undefined
+
+    mediaQuery.addEventListener('change', applyAppearance)
+    return () => mediaQuery.removeEventListener('change', applyAppearance)
+  }, [appSettings.appearance])
 
   useEffect(() => {
     return window.eqoustics.onMenuAction((action: FileMenuAction) => {
@@ -250,6 +300,14 @@ function App() {
     setRecentFiles(entries)
   }, [])
 
+  const updateAppSettings = useCallback(async (update: AppSettingsUpdatePayload) => {
+    const nextSettings = await window.eqoustics.updateSettings(update)
+    setAppSettings(nextSettings)
+    if (update.speechModelSize) {
+      setIsModelRestartRequired(nextSettings.speechModelSize !== initialSpeechModelSizeRef.current)
+    }
+  }, [])
+
   const documentWithVisibleEditorState = useCallback((sourceDocument: NotebookDocument): NotebookDocument => {
     const activeLatex = activeCellId ? activeCellHandleRef.current?.getLatex() : null
     if (!activeCellId || activeLatex === null || activeLatex === undefined) {
@@ -288,6 +346,13 @@ function App() {
       return
     }
 
+    const parsed = parseNotebookFromLatex(opened.content, titleFromPath(opened.path))
+    replaceDocument(parsed, opened.path)
+    await refreshRecentFiles()
+  }
+
+  const handleOpenRecentFile = async (recentFilePath: string) => {
+    const opened = await window.eqoustics.openNotebookAtPath(recentFilePath)
     const parsed = parseNotebookFromLatex(opened.content, titleFromPath(opened.path))
     replaceDocument(parsed, opened.path)
     await refreshRecentFiles()
@@ -636,6 +701,20 @@ function App() {
     activeCellHandleRef.current?.insert(snippet, mode)
   }
 
+  const handleSpeechTranscript = useCallback((transcript: string) => {
+    activeCellHandleRef.current?.insert(transcript, 'write')
+  }, [])
+
+  const getCurrentSpeechRowLatex = useCallback(() => {
+    return activeCellHandleRef.current?.getLatex() ?? ''
+  }, [])
+
+  const handlePrepareSpeechInput = useCallback(() => {
+    if (!document) return
+    if (activeCellId !== null) return
+    setActiveCellId(document.cells[0]?.id ?? null)
+  }, [activeCellId, document])
+
   const handleFormatText = (format: TextFormatCommand) => {
     activeCellHandleRef.current?.format(format)
   }
@@ -895,6 +974,15 @@ function App() {
         onOpenNotebook={handleOpenNotebook}
         onSaveNotebook={() => void persistDocument(false)}
         onSaveNotebookAs={() => void persistDocument(true)}
+        recentFiles={recentFiles}
+        onOpenRecentFile={(recentFilePath) => void handleOpenRecentFile(recentFilePath)}
+        appSettings={appSettings}
+        microphones={microphones}
+        isModelRestartRequired={isModelRestartRequired}
+        onUpdateSettings={(update) => void updateAppSettings(update)}
+        onRefreshMicrophones={() => void refreshMicrophones()}
+        onRestartApp={() => void window.eqoustics.restartApp()}
+        onDismissModelRestart={() => setIsModelRestartRequired(false)}
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
         onUndo={handleUndo}
@@ -908,6 +996,13 @@ function App() {
         onMenuVisibilityChange={setIsToolbarMenuOpen}
       />
       <div className="document-scroll-region">
+        <FloatingSpeechControl
+          disabled={document.cells.length === 0}
+          microphoneDeviceId={appSettings.microphoneDeviceId}
+          getCurrentRowLatex={getCurrentSpeechRowLatex}
+          onBeforeListen={handlePrepareSpeechInput}
+          onTranscript={handleSpeechTranscript}
+        />
         {tableOfContentsHeadings.length > 0 ? (
           <aside
             className={`table-of-contents${isToolbarMenuOpen ? ' table-of-contents-muted' : ''}`}

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron'
-import { readFile, unlink, writeFile } from 'node:fs/promises'
+import { access, readFile, unlink, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 
@@ -30,14 +30,53 @@ function getNotebookFilters() {
   return [{ name: 'Eqoustics Notebook', extensions: [EQOUSTICS_FILE_EXTENSION] }]
 }
 
-function updateRecentFiles(store: ElectronStoreLike, filePath: string, title: string) {
+function recentTitleFromPath(filePath: string) {
+  return path.basename(filePath, path.extname(filePath))
+}
+
+function normalizeRecentFileEntry(entry: RecentFileEntry): RecentFileEntry {
+  return {
+    ...entry,
+    title: recentTitleFromPath(entry.path),
+  }
+}
+
+async function fileExists(filePath: string) {
+  try {
+    await access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function listExistingRecentFiles(store: ElectronStoreLike) {
   const existing = (store.get(RECENT_FILES_KEY) as RecentFileEntry[] | undefined) ?? []
+  const normalizedEntries: RecentFileEntry[] = []
+
+  for (const entry of existing) {
+    if (await fileExists(entry.path)) {
+      normalizedEntries.push(normalizeRecentFileEntry(entry))
+    }
+  }
+
+  const nextEntries = normalizedEntries.slice(0, MAX_RECENT_FILES)
+  if (JSON.stringify(existing) !== JSON.stringify(nextEntries)) {
+    store.set(RECENT_FILES_KEY, nextEntries)
+  }
+
+  return nextEntries
+}
+
+function updateRecentFiles(store: ElectronStoreLike, filePath: string) {
+  const existing = ((store.get(RECENT_FILES_KEY) as RecentFileEntry[] | undefined) ?? [])
+    .map(normalizeRecentFileEntry)
   const deduped = existing.filter((entry) => entry.path !== filePath)
 
   const updated: RecentFileEntry[] = [
     {
       path: filePath,
-      title,
+      title: recentTitleFromPath(filePath),
       lastOpenedAt: new Date().toISOString(),
     },
     ...deduped,
@@ -75,23 +114,21 @@ export function registerFileHandlers(mainWindow: BrowserWindow, store: ElectronS
     }
 
     const file = await readNotebookFile(result.filePaths[0])
-    const title = path.basename(file.path, path.extname(file.path))
-    updateRecentFiles(store, file.path, title)
+    updateRecentFiles(store, file.path)
 
     return file
   })
 
   ipcMain.handle(IPC_CHANNELS.openNotebookAtPath, async (_, filePath: string) => {
     const file = await readNotebookFile(filePath)
-    const title = path.basename(file.path, path.extname(file.path))
-    updateRecentFiles(store, file.path, title)
+    updateRecentFiles(store, file.path)
 
     return file
   })
 
   ipcMain.handle(IPC_CHANNELS.saveNotebook, async (_, file: StoredNotebookFile & { title: string }) => {
     await writeFile(file.path, file.content, 'utf8')
-    updateRecentFiles(store, file.path, file.title)
+    updateRecentFiles(store, file.path)
     return { path: file.path }
   })
 
@@ -106,7 +143,7 @@ export function registerFileHandlers(mainWindow: BrowserWindow, store: ElectronS
     }
 
     await writeFile(result.filePath, file.content, 'utf8')
-    updateRecentFiles(store, result.filePath, file.title)
+    updateRecentFiles(store, result.filePath)
 
     return { path: result.filePath }
   })
@@ -142,7 +179,7 @@ export function registerFileHandlers(mainWindow: BrowserWindow, store: ElectronS
   })
 
   ipcMain.handle(IPC_CHANNELS.listRecentFiles, async () => {
-    return (store.get(RECENT_FILES_KEY) as RecentFileEntry[] | undefined) ?? []
+    return listExistingRecentFiles(store)
   })
 
   ipcMain.handle(IPC_CHANNELS.writeClipboardText, (_event, text: string) => {

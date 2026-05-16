@@ -1,10 +1,12 @@
-import { app, BrowserWindow, Menu, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Store from 'electron-store'
 
 import { IPC_CHANNELS, type WindowControlAction, type WindowStatePayload } from '../src/shared/ipc/channels'
 import { registerFileHandlers } from './ipc/file-handlers'
+import { registerSpeechModelHandlers } from './ipc/speech-model-handlers'
+import { registerSettingsHandlers } from './ipc/settings-handlers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -129,6 +131,11 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   registerWindowControlHandlers()
+  registerSettingsHandlers(store)
+  registerSpeechModelHandlers(store)
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
+  })
   createWindow()
   Menu.setApplicationMenu(null)
 })

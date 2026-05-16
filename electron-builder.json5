@@ -11,6 +11,12 @@
     "dist",
     "dist-electron"
   ],
+  "extraResources": [
+    {
+      "from": "electron/python",
+      "to": "python"
+    }
+  ],
   "mac": {
     "target": [
       "dmg"

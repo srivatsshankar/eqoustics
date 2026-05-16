@@ -23,6 +23,10 @@ import {
   faScissors,
   faPaste,
   faTrash,
+  faMicrophone,
+  faPalette,
+  faBrain,
+  faCheck,
 } from '@fortawesome/free-solid-svg-icons'
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
 import { CasesDropdown } from './CasesDropdown'
@@ -30,6 +34,8 @@ import { MatrixDropdown } from './MatrixDropdown'
 import type { TextFormatCommand } from '../cell/CellEditor'
 import type { CopyAsFormat } from '../../clipboard/editorClipboard'
 import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
+import type { RecentFileEntry } from '../../shared/types/notebook'
+import type { AppSettingsPayload, AppSettingsUpdatePayload } from '../../shared/ipc/channels'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
@@ -43,6 +49,15 @@ interface EditorToolbarProps {
   onExportLatex: () => void
   onSaveNotebook: () => void
   onSaveNotebookAs: () => void
+  recentFiles: RecentFileEntry[]
+  onOpenRecentFile: (filePath: string) => void | Promise<void>
+  appSettings: AppSettingsPayload
+  microphones: MediaDeviceInfo[]
+  isModelRestartRequired: boolean
+  onUpdateSettings: (update: AppSettingsUpdatePayload) => void | Promise<void>
+  onRefreshMicrophones: () => void | Promise<void>
+  onRestartApp: () => void | Promise<void>
+  onDismissModelRestart: () => void
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
@@ -1510,6 +1525,15 @@ export function EditorToolbar({
   onOpenNotebook,
   onSaveNotebook,
   onSaveNotebookAs,
+  recentFiles,
+  onOpenRecentFile,
+  appSettings,
+  microphones,
+  isModelRestartRequired,
+  onUpdateSettings,
+  onRefreshMicrophones,
+  onRestartApp,
+  onDismissModelRestart,
   canUndo,
   canRedo,
   onUndo,
@@ -1528,16 +1552,20 @@ export function EditorToolbar({
     .filter((group): group is SymbolGroup => Boolean(group))
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false)
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false)
+  const [isCommandsMenuOpen, setIsCommandsMenuOpen] = useState(false)
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false)
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false)
   const [isCopyAsMenuOpen, setIsCopyAsMenuOpen] = useState(false)
+  const [isMicrophoneMenuOpen, setIsMicrophoneMenuOpen] = useState(false)
   const fileMenuContainerRef = useRef<HTMLElement | null>(null)
+  const microphoneMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    onMenuVisibilityChange?.(isFileMenuOpen || isEditMenuOpen)
-  }, [isEditMenuOpen, isFileMenuOpen, onMenuVisibilityChange])
+    onMenuVisibilityChange?.(isFileMenuOpen || isEditMenuOpen || isCommandsMenuOpen || isSettingsMenuOpen)
+  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isSettingsMenuOpen, onMenuVisibilityChange])
 
   useEffect(() => {
-    if (!isFileMenuOpen && !isEditMenuOpen) {
+    if (!isFileMenuOpen && !isEditMenuOpen && !isCommandsMenuOpen && !isSettingsMenuOpen) {
       return
     }
 
@@ -1545,30 +1573,57 @@ export function EditorToolbar({
       if (fileMenuContainerRef.current && !fileMenuContainerRef.current.contains(event.target as Node)) {
         setIsFileMenuOpen(false)
         setIsEditMenuOpen(false)
+        setIsCommandsMenuOpen(false)
+        setIsSettingsMenuOpen(false)
         setIsExportMenuOpen(false)
         setIsCopyAsMenuOpen(false)
+        setIsMicrophoneMenuOpen(false)
       }
     }
 
     document.addEventListener('mousedown', handleOutsideClick)
     return () => document.removeEventListener('mousedown', handleOutsideClick)
-  }, [isEditMenuOpen, isFileMenuOpen])
+  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isSettingsMenuOpen])
 
-  const executeFileAction = (action: () => void) => {
-    action()
+  useEffect(() => {
+    if (!isMicrophoneMenuOpen) return
+
+    function handleOutsideMicrophoneClick(event: MouseEvent) {
+      if (!microphoneMenuRef.current?.contains(event.target as Node)) {
+        setIsMicrophoneMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideMicrophoneClick)
+    return () => document.removeEventListener('mousedown', handleOutsideMicrophoneClick)
+  }, [isMicrophoneMenuOpen])
+
+  const executeFileAction = (action: () => void | Promise<void>) => {
+    void action()
     setIsFileMenuOpen(false)
     setIsEditMenuOpen(false)
+    setIsCommandsMenuOpen(false)
+    setIsSettingsMenuOpen(false)
     setIsExportMenuOpen(false)
     setIsCopyAsMenuOpen(false)
+    setIsMicrophoneMenuOpen(false)
   }
 
   const executeEditAction = (action: () => void | Promise<void>) => {
     void action()
     setIsFileMenuOpen(false)
     setIsEditMenuOpen(false)
+    setIsCommandsMenuOpen(false)
+    setIsSettingsMenuOpen(false)
     setIsExportMenuOpen(false)
     setIsCopyAsMenuOpen(false)
+    setIsMicrophoneMenuOpen(false)
   }
+  const visibleRecentFiles = [...recentFiles]
+    .sort((left, right) => Date.parse(right.lastOpenedAt) - Date.parse(left.lastOpenedAt))
+    .slice(0, 7)
+  const selectedMicrophone = microphones.find((microphone) => microphone.deviceId === appSettings.microphoneDeviceId)
+  const selectedMicrophoneLabel = selectedMicrophone?.label || (appSettings.microphoneDeviceId ? 'Selected microphone' : 'System default')
 
   return (
     <header className="editor-toolbar" ref={fileMenuContainerRef}>
@@ -1583,8 +1638,11 @@ export function EditorToolbar({
             onClick={() => {
               setIsFileMenuOpen((current) => !current)
               setIsEditMenuOpen(false)
+              setIsCommandsMenuOpen(false)
+              setIsSettingsMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
+              setIsMicrophoneMenuOpen(false)
             }}
           >
             <span>File</span>
@@ -1598,11 +1656,51 @@ export function EditorToolbar({
             onClick={() => {
               setIsEditMenuOpen((current) => !current)
               setIsFileMenuOpen(false)
+              setIsCommandsMenuOpen(false)
+              setIsSettingsMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
+              setIsMicrophoneMenuOpen(false)
             }}
           >
             <span>Edit</span>
+          </button>
+          <button
+            type="button"
+            className={`menu-bar-button${isCommandsMenuOpen ? ' menu-bar-button-open' : ''}`}
+            aria-haspopup="menu"
+            aria-expanded={isCommandsMenuOpen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setIsCommandsMenuOpen((current) => !current)
+              setIsFileMenuOpen(false)
+              setIsEditMenuOpen(false)
+              setIsSettingsMenuOpen(false)
+              setIsExportMenuOpen(false)
+              setIsCopyAsMenuOpen(false)
+              setIsMicrophoneMenuOpen(false)
+            }}
+          >
+            <span>Commands</span>
+          </button>
+          <button
+            type="button"
+            className={`menu-bar-button${isSettingsMenuOpen ? ' menu-bar-button-open' : ''}`}
+            aria-haspopup="menu"
+            aria-expanded={isSettingsMenuOpen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setIsSettingsMenuOpen((current) => !current)
+              setIsFileMenuOpen(false)
+              setIsEditMenuOpen(false)
+              setIsCommandsMenuOpen(false)
+              setIsExportMenuOpen(false)
+              setIsCopyAsMenuOpen(false)
+              setIsMicrophoneMenuOpen(false)
+              void onRefreshMicrophones()
+            }}
+          >
+            <span>Settings</span>
           </button>
         </div>
       </div>
@@ -1942,6 +2040,30 @@ export function EditorToolbar({
             </div>
           ) : null}
         </div>
+        <div className="menu-divider" />
+        <div className="file-menu-recents" aria-label="Recent Files">
+          <div className="file-menu-section-label">Recent Files</div>
+          {visibleRecentFiles.length > 0 ? (
+            visibleRecentFiles.map((entry) => (
+              <button
+                key={entry.path}
+                type="button"
+                className="file-menu-item file-menu-recent-item"
+                role="menuitem"
+                title={entry.path}
+                onClick={() => executeFileAction(() => { void onOpenRecentFile(entry.path) })}
+              >
+                <FontAwesomeIcon icon={faFile} style={{ width: '1rem', marginRight: '0.4rem' }} />
+                <span className="file-menu-recent-text">
+                  <span className="file-menu-recent-title">{entry.title}</span>
+                  <span className="file-menu-recent-path">{entry.path}</span>
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="file-menu-empty">No recent files</div>
+          )}
+        </div>
       </div>
       <div className={`file-menu-drawer edit-menu-drawer${isEditMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Edit">
         <button type="button" className="file-menu-item" role="menuitem" disabled={!canUndo} onClick={() => executeEditAction(onUndo)}>
@@ -2001,6 +2123,136 @@ export function EditorToolbar({
         <button type="button" className="file-menu-item" role="menuitem" disabled={!canDeleteSelection} onMouseDown={(e) => e.preventDefault()} onClick={() => executeEditAction(onDeleteSelection)}>
           <FontAwesomeIcon icon={faTrash} style={{ width: '1rem', marginRight: '0.4rem' }} /> Delete
         </button>
+      </div>
+      <div className={`file-menu-drawer commands-menu-drawer${isCommandsMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Commands">
+        <div className="file-menu-empty">Commands will be available here.</div>
+      </div>
+      <div className={`file-menu-drawer settings-menu-drawer${isSettingsMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Settings">
+        <section className="settings-menu-section" aria-labelledby="settings-microphone-label">
+          <div className="settings-menu-heading" id="settings-microphone-label">
+            <FontAwesomeIcon icon={faMicrophone} />
+            <span>Microphone</span>
+          </div>
+          <div className="settings-microphone-dropdown" ref={microphoneMenuRef}>
+            <button
+              type="button"
+              className={`settings-microphone-trigger${isMicrophoneMenuOpen ? ' settings-microphone-trigger-open' : ''}`}
+              aria-haspopup="listbox"
+              aria-expanded={isMicrophoneMenuOpen}
+              onClick={() => setIsMicrophoneMenuOpen((current) => !current)}
+            >
+              <span>{selectedMicrophoneLabel}</span>
+              <FontAwesomeIcon icon={faChevronDown} />
+            </button>
+            {isMicrophoneMenuOpen ? (
+              <div className="settings-microphone-options" role="listbox" aria-label="Microphone">
+                <button
+                  type="button"
+                  className={`settings-microphone-option${appSettings.microphoneDeviceId === null ? ' settings-microphone-option-active' : ''}`}
+                  role="option"
+                  aria-selected={appSettings.microphoneDeviceId === null}
+                  onClick={() => {
+                    void onUpdateSettings({ microphoneDeviceId: null })
+                    setIsMicrophoneMenuOpen(false)
+                  }}
+                >
+                  <span>System default</span>
+                  {appSettings.microphoneDeviceId === null ? <FontAwesomeIcon icon={faCheck} /> : null}
+                </button>
+                {microphones.map((microphone, index) => {
+                  const label = microphone.label || `Microphone ${index + 1}`
+                  const isSelected = microphone.deviceId === appSettings.microphoneDeviceId
+
+                  return (
+                    <button
+                      key={microphone.deviceId || index}
+                      type="button"
+                      className={`settings-microphone-option${isSelected ? ' settings-microphone-option-active' : ''}`}
+                      role="option"
+                      aria-selected={isSelected}
+                      title={label}
+                      onClick={() => {
+                        void onUpdateSettings({ microphoneDeviceId: microphone.deviceId })
+                        setIsMicrophoneMenuOpen(false)
+                      }}
+                    >
+                      <span>{label}</span>
+                      {isSelected ? <FontAwesomeIcon icon={faCheck} /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+          <button type="button" className="settings-menu-secondary-button" onClick={() => { void onRefreshMicrophones() }}>
+            Refresh microphones
+          </button>
+        </section>
+        <div className="menu-divider" />
+        <section className="settings-menu-section" aria-labelledby="settings-appearance-label">
+          <div className="settings-menu-heading" id="settings-appearance-label">
+            <FontAwesomeIcon icon={faPalette} />
+            <span>Appearance</span>
+          </div>
+          <div className="settings-segmented-control" role="radiogroup" aria-label="Appearance">
+            {[
+              { value: 'light', label: 'Light' },
+              { value: 'dark', label: 'Dark' },
+              { value: 'system', label: 'System' },
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`settings-segment${appSettings.appearance === option.value ? ' settings-segment-active' : ''}`}
+                role="radio"
+                aria-checked={appSettings.appearance === option.value}
+                onClick={() => { void onUpdateSettings({ appearance: option.value as AppSettingsPayload['appearance'] }) }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </section>
+        <div className="menu-divider" />
+        <section className="settings-menu-section" aria-labelledby="settings-model-label">
+          <div className="settings-menu-heading" id="settings-model-label">
+            <FontAwesomeIcon icon={faBrain} />
+            <span>Gemma Model</span>
+          </div>
+          <div className="settings-segmented-control" role="radiogroup" aria-label="Gemma model">
+            {[
+              { value: '2b', label: 'Gemma 2B' },
+              { value: '4b', label: 'Gemma 4B' },
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`settings-segment${appSettings.speechModelSize === option.value ? ' settings-segment-active' : ''}`}
+                role="radio"
+                aria-checked={appSettings.speechModelSize === option.value}
+                onClick={() => { void onUpdateSettings({ speechModelSize: option.value as AppSettingsPayload['speechModelSize'] }) }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="settings-menu-note">
+            Eqoustics chooses the best Gemma model for your system for speech recognition, but you can change the preferred model based on your requirements. Please note that changing the model can affect performance.
+          </p>
+          {isModelRestartRequired ? (
+            <div className="settings-restart-panel" role="status">
+              <span>Restart to download and load the selected LiteRT model.</span>
+              <div className="settings-restart-actions">
+                <button type="button" className="settings-menu-secondary-button" onClick={onDismissModelRestart}>
+                  Later
+                </button>
+                <button type="button" className="settings-menu-primary-button" onClick={() => { void onRestartApp() }}>
+                  Restart now
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
       </div>
     </header>
   )

@@ -326,6 +326,244 @@
   font-size: 0.82rem;
 }
 
+.file-menu-recents {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.file-menu-section-label {
+  padding: 0 0.5rem 0.18rem;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.file-menu-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.file-menu-recent-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.file-menu-recent-title,
+.file-menu-recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-menu-recent-title {
+  color: #111827;
+}
+
+.file-menu-recent-path {
+  color: #64748b;
+  font-size: 0.68rem;
+}
+
+.file-menu-empty {
+  padding: 0.35rem 0.5rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.settings-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.settings-menu-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.5rem;
+  color: #111827;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.settings-microphone-dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.settings-microphone-trigger {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid rgba(31, 41, 51, 0.18);
+  border-radius: 0.22rem;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  text-align: left;
+}
+
+.settings-microphone-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-microphone-trigger:hover,
+.settings-microphone-trigger-open {
+  border-color: rgba(37, 99, 235, 0.26);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.settings-microphone-options {
+  position: absolute;
+  top: calc(100% + 0.24rem);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  max-height: min(14rem, 45vh);
+  padding: 0.24rem;
+  overflow-y: auto;
+  border: 1px solid rgba(31, 41, 51, 0.16);
+  border-radius: 0.28rem;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.settings-microphone-option {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  padding: 0.38rem 0.44rem;
+  border: 1px solid transparent;
+  border-radius: 0.22rem;
+  background: transparent;
+  color: #111827;
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.settings-microphone-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-microphone-option:hover {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.settings-microphone-option-active {
+  color: #1d4ed8;
+  font-weight: 700;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.settings-segmented-control {
+  display: flex;
+  gap: 0.18rem;
+  padding: 0.18rem;
+  border: 1px solid rgba(31, 41, 51, 0.12);
+  border-radius: 0.28rem;
+  background: #f8fafc;
+}
+
+.settings-segment {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.34rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: #334155;
+  font-size: 0.78rem;
+}
+
+.settings-segment:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.settings-segment-active {
+  border-color: rgba(37, 99, 235, 0.26);
+  background: #ffffff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.settings-menu-note {
+  margin: 0;
+  padding: 0 0.5rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.settings-menu-secondary-button,
+.settings-menu-primary-button {
+  border: 1px solid rgba(31, 41, 51, 0.16);
+  border-radius: 0.22rem;
+  padding: 0.34rem 0.5rem;
+  background: #ffffff;
+  color: #111827;
+  font-size: 0.76rem;
+}
+
+.settings-menu-secondary-button:hover,
+.settings-menu-primary-button:hover {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.settings-menu-primary-button {
+  border-color: rgba(37, 99, 235, 0.4);
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.settings-menu-primary-button:hover {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.settings-restart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border: 1px solid rgba(202, 138, 4, 0.28);
+  border-radius: 0.28rem;
+  background: rgba(254, 249, 195, 0.55);
+  color: #854d0e;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.settings-restart-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
 .title-group {
   flex: 1 1 420px;
 }
@@ -473,6 +711,109 @@
   position: relative;
   display: flex;
   overflow: hidden;
+}
+
+.floating-speech-window {
+  position: absolute;
+  z-index: 24;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  min-width: 0;
+  padding: 0.24rem;
+  border: 1px solid rgba(31, 41, 51, 0.16);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  user-select: none;
+}
+
+.speech-window-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1.7rem;
+  color: #94a3b8;
+  cursor: grab;
+  font-size: 0.74rem;
+}
+
+.speech-window-drag-handle:active {
+  cursor: grabbing;
+}
+
+.speech-window-tooltip-wrap {
+  display: inline-flex;
+}
+
+.speech-window-mic-button,
+.speech-window-state-icon {
+  min-width: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid rgba(31, 41, 51, 0.22);
+  border-radius: 0.28rem;
+  background: #ffffff;
+  color: #dc2626;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.speech-window-state-icon {
+  cursor: help;
+}
+
+.speech-window-mic-button:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.1);
+  border-color: rgba(220, 38, 38, 0.34);
+  color: #b91c1c;
+  transform: none;
+  box-shadow: none;
+}
+
+.speech-window-mic-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.floating-speech-window-listening .speech-window-mic-button {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.4);
+  color: #1d4ed8;
+}
+
+.floating-speech-window-listening .speech-window-mic-button:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: rgba(37, 99, 235, 0.58);
+  color: #1e40af;
+}
+
+.speech-window-loader {
+  color: #111827;
+}
+
+.speech-window-loader-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(17, 24, 39, 0.16);
+  border-top-color: currentColor;
+  border-radius: 999px;
+  animation: speech-loader-spin 820ms linear infinite;
+}
+
+@keyframes speech-loader-spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.speech-window-error-icon {
+  color: #dc2626;
 }
 
 .document-shell {
@@ -818,7 +1159,7 @@
   gap: 0;
   max-width: 760px;
   margin: 0 auto;
-  padding: 2rem 4rem 6rem;
+  padding: 2rem 4rem max(6rem, 44vh);
   background: #ffffff;
 }
 
@@ -2285,6 +2626,281 @@ sub.math-script {
   transform: translate(-50%, 0);
 }
 
+:root[data-appearance='dark'] .app-shell,
+:root[data-appearance='dark'] .document-shell,
+:root[data-appearance='dark'] .notebook-editor {
+  background: #111827;
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .window-titlebar,
+:root[data-appearance='dark'] .editor-toolbar,
+:root[data-appearance='dark'] .file-menu-drawer,
+:root[data-appearance='dark'] .floating-speech-window,
+:root[data-appearance='dark'] .link-prompt,
+:root[data-appearance='dark'] .symbol-dropdown-menu,
+:root[data-appearance='dark'] .matrix-dropdown-popover {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: #1f2937;
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .window-document-title,
+:root[data-appearance='dark'] .window-app-title-separator,
+:root[data-appearance='dark'] .window-save-state,
+:root[data-appearance='dark'] .window-control-button,
+:root[data-appearance='dark'] .menu-bar-button,
+:root[data-appearance='dark'] .toolbar-hint,
+:root[data-appearance='dark'] .file-menu-item,
+:root[data-appearance='dark'] .settings-menu-heading,
+:root[data-appearance='dark'] .file-menu-recent-title,
+:root[data-appearance='dark'] .speech-window-drag-handle,
+:root[data-appearance='dark'] .speech-window-mic-button,
+:root[data-appearance='dark'] .speech-window-state-icon,
+:root[data-appearance='dark'] .cell-editor,
+:root[data-appearance='dark'] .latex-source-area,
+:root[data-appearance='dark'] .math-render-node,
+:root[data-appearance='dark'] .text-run,
+:root[data-appearance='dark'] .toc-heading,
+:root[data-appearance='dark'] .matrix-option-button,
+:root[data-appearance='dark'] .matrix-size-button,
+:root[data-appearance='dark'] .matrix-env-button,
+:root[data-appearance='dark'] .matrix-manual-row,
+:root[data-appearance='dark'] .matrix-manual-row input,
+:root[data-appearance='dark'] .matrix-manual-row button {
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .file-menu-item,
+:root[data-appearance='dark'] .window-control-button,
+:root[data-appearance='dark'] .settings-microphone-trigger,
+:root[data-appearance='dark'] .settings-microphone-options,
+:root[data-appearance='dark'] .settings-microphone-option,
+:root[data-appearance='dark'] .settings-menu-secondary-button,
+:root[data-appearance='dark'] .settings-segment-active,
+:root[data-appearance='dark'] .cell-editor,
+:root[data-appearance='dark'] .latex-source-area,
+:root[data-appearance='dark'] .speech-window-mic-button,
+:root[data-appearance='dark'] .speech-window-state-icon,
+:root[data-appearance='dark'] .toc-toggle-button,
+:root[data-appearance='dark'] .matrix-option-button,
+:root[data-appearance='dark'] .matrix-size-button,
+:root[data-appearance='dark'] .matrix-env-button,
+:root[data-appearance='dark'] .matrix-manual-row input,
+:root[data-appearance='dark'] .matrix-manual-row button,
+:root[data-appearance='dark'] .matrix-grid-cell {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: #111827;
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .matrix-dropdown-popover {
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.38);
+}
+
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-option-button,
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-size-button,
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-env-button,
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-manual-row input,
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-manual-row button,
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-grid-cell {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: #111827;
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .matrix-dropdown-popover .matrix-manual-row input:focus {
+  border-color: rgba(96, 165, 250, 0.52);
+  outline: none;
+}
+
+:root[data-appearance='dark'] .visual-math-editor,
+:root[data-appearance='dark'] .visual-math-editor .math-symbol,
+:root[data-appearance='dark'] .visual-math-editor [class^="math-"],
+:root[data-appearance='dark'] .visual-math-editor [class*=" math-"] {
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .visual-math-editor .text-link {
+  color: #93c5fd;
+  text-decoration-color: rgba(147, 197, 253, 0.82);
+}
+
+:root[data-appearance='dark'] .visual-math-editor .text-link:hover {
+  color: #bfdbfe;
+  text-decoration-color: currentColor;
+}
+
+:root[data-appearance='dark'] .visual-math-editor .math-generic-command-label,
+:root[data-appearance='dark'] .visual-math-editor .math-environment-label,
+:root[data-appearance='dark'] .visual-math-editor .math-generic-brace,
+:root[data-appearance='dark'] .visual-math-editor .math-text::before,
+:root[data-appearance='dark'] .visual-math-editor .math-text::after,
+:root[data-appearance='dark'] .visual-math-editor .math-cases-if,
+:root[data-appearance='dark'] .visual-math-editor .math-hspace {
+  color: #94a3b8;
+}
+
+:root[data-appearance='dark'] .visual-math-editor .text-link .math-symbol,
+:root[data-appearance='dark'] .visual-math-editor .text-link [class^="math-"],
+:root[data-appearance='dark'] .visual-math-editor .text-link [class*=" math-"] {
+  color: inherit;
+}
+
+:root[data-appearance='dark'] .visual-math-editor .math-matrix[data-grid-lines="dotted"] td + td {
+  border-left-color: rgba(148, 163, 184, 0.42);
+}
+
+:root[data-appearance='dark'] .visual-math-editor .math-matrix[data-grid-lines="dotted"] tr + tr td {
+  border-top-color: rgba(148, 163, 184, 0.42);
+}
+
+:root[data-appearance='dark'] .cell-editor-active:focus-within .visual-math-editor .math-slot,
+:root[data-appearance='dark'] .cell-editor-active:focus-within .visual-math-editor .math-space {
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.82);
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+}
+
+:root[data-appearance='dark'] .cell-editor-active:focus-within .visual-math-editor .math-space-negative {
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.8);
+  background: rgba(153, 27, 27, 0.24);
+  color: #fecaca;
+}
+
+:root[data-appearance='dark'] .window-save-state-saved {
+  border-color: rgba(52, 211, 153, 0.34);
+  background: rgba(5, 150, 105, 0.22);
+  color: #6ee7b7;
+}
+
+:root[data-appearance='dark'] .window-save-state-unsaved {
+  border-color: rgba(251, 191, 36, 0.36);
+  background: rgba(146, 64, 14, 0.28);
+  color: #fcd34d;
+}
+
+:root[data-appearance='dark'] .menu-bar-button,
+:root[data-appearance='dark'] .icon-button,
+:root[data-appearance='dark'] .symbol-btn,
+:root[data-appearance='dark'] .cell-icon-button,
+:root[data-appearance='dark'] .settings-segment {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #111827;
+  color: #e5e7eb;
+}
+
+:root[data-appearance='dark'] .menu-bar-button:hover,
+:root[data-appearance='dark'] .menu-bar-button-open,
+:root[data-appearance='dark'] .file-menu-item:hover:not(:disabled),
+:root[data-appearance='dark'] .icon-button:hover:not(:disabled),
+:root[data-appearance='dark'] .symbol-btn:hover:not(:disabled),
+:root[data-appearance='dark'] .cell-icon-button:hover:not(:disabled),
+:root[data-appearance='dark'] .settings-microphone-trigger:hover,
+:root[data-appearance='dark'] .settings-microphone-trigger-open,
+:root[data-appearance='dark'] .settings-microphone-option:hover,
+:root[data-appearance='dark'] .settings-segment:hover,
+:root[data-appearance='dark'] .toc-toggle-button:hover,
+:root[data-appearance='dark'] .toc-toggle-button-active,
+:root[data-appearance='dark'] .toc-heading:hover,
+:root[data-appearance='dark'] .matrix-option-button:hover:not(:disabled),
+:root[data-appearance='dark'] .matrix-size-button:hover:not(:disabled),
+:root[data-appearance='dark'] .matrix-env-button:hover:not(:disabled),
+:root[data-appearance='dark'] .matrix-manual-row button:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(37, 99, 235, 0.22);
+  color: #bfdbfe;
+}
+
+:root[data-appearance='dark'] .settings-segmented-control,
+:root[data-appearance='dark'] .cell-icon-button,
+:root[data-appearance='dark'] .symbol-btn {
+  background: #0f172a;
+}
+
+:root[data-appearance='dark'] .file-menu-recent-path,
+:root[data-appearance='dark'] .settings-menu-note,
+:root[data-appearance='dark'] .toolbar-group-label,
+:root[data-appearance='dark'] .file-menu-section-label,
+:root[data-appearance='dark'] .file-menu-empty,
+:root[data-appearance='dark'] .document-path,
+:root[data-appearance='dark'] .document-status-message,
+:root[data-appearance='dark'] .toc-heading-level-4,
+:root[data-appearance='dark'] .matrix-dropdown-label,
+:root[data-appearance='dark'] .matrix-env-button-icon,
+:root[data-appearance='dark'] .matrix-hover-label,
+:root[data-appearance='dark'] .matrix-array-help,
+:root[data-appearance='dark'] .matrix-manual-row span {
+  color: #94a3b8;
+}
+
+:root[data-appearance='dark'] .menu-divider,
+:root[data-appearance='dark'] .toolbar-action-divider,
+:root[data-appearance='dark'] .matrix-dropdown-divider {
+  background: rgba(148, 163, 184, 0.18);
+}
+
+:root[data-appearance='dark'] .speech-window-mic-button {
+  color: #f87171;
+}
+
+:root[data-appearance='dark'] .floating-speech-window-listening .speech-window-mic-button,
+:root[data-appearance='dark'] .settings-segment-active,
+:root[data-appearance='dark'] .settings-microphone-option-active,
+:root[data-appearance='dark'] .matrix-option-button-active,
+:root[data-appearance='dark'] .matrix-size-button-active,
+:root[data-appearance='dark'] .matrix-env-button-active,
+:root[data-appearance='dark'] .matrix-grid-cell-active {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(37, 99, 235, 0.24);
+  color: #93c5fd;
+}
+
+:root[data-appearance='dark'] .floating-speech-window-listening .speech-window-mic-button:hover:not(:disabled) {
+  border-color: rgba(147, 197, 253, 0.52);
+  background: rgba(37, 99, 235, 0.34);
+  color: #bfdbfe;
+}
+
+:root[data-appearance='dark'] .speech-window-loader {
+  color: #f8fafc;
+}
+
+:root[data-appearance='dark'] .speech-window-loader-spinner {
+  border-color: rgba(248, 250, 252, 0.22);
+  border-top-color: currentColor;
+}
+
+:root[data-appearance='dark'] .window-control-minimize:hover {
+  border-color: rgba(250, 204, 21, 0.42);
+  background: rgba(202, 138, 4, 0.28);
+  color: #fde68a;
+}
+
+:root[data-appearance='dark'] .window-control-maximize:hover {
+  border-color: rgba(74, 222, 128, 0.42);
+  background: rgba(22, 101, 52, 0.34);
+  color: #86efac;
+}
+
+:root[data-appearance='dark'] .window-control-close:hover {
+  border-color: rgba(248, 113, 113, 0.48);
+  background: rgba(153, 27, 27, 0.42);
+  color: #fecaca;
+}
+
+:root[data-appearance='dark'] .settings-restart-panel {
+  border-color: rgba(250, 204, 21, 0.28);
+  background: rgba(113, 63, 18, 0.38);
+  color: #fde68a;
+}
+
+:root[data-appearance='dark'] .settings-menu-primary-button {
+  border-color: rgba(96, 165, 250, 0.48);
+  background: #2563eb;
+  color: #ffffff;
+}
+
 .symbol-dropdown-menu-scroll {
   display: flex;
   flex-direction: column;
@@ -2461,7 +3077,7 @@ sub.math-script {
   }
 
   .notebook-editor {
-    padding: 1.5rem 1.5rem 4rem;
+    padding: 1.5rem 1.5rem max(4rem, 42vh);
   }
 
   .welcome-card {

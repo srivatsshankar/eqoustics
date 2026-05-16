@@ -1,6 +1,15 @@
 /// <reference types="vite/client" />
 
-import type { FileMenuAction, WindowControlAction, WindowStatePayload } from './shared/ipc/channels'
+import type {
+	FileMenuAction,
+	AppSettingsPayload,
+	AppSettingsUpdatePayload,
+	SpeechAudioChunkPayload,
+	SpeechModelStatusPayload,
+	SpeechTranscriptResult,
+	WindowControlAction,
+	WindowStatePayload,
+} from './shared/ipc/channels'
 import type { NotebookDocument, RecentFileEntry, StoredNotebookFile } from './shared/types/notebook'
 
 declare global {
@@ -17,6 +26,13 @@ declare global {
 			captureHtml: (html: string) => Promise<void>
 			writeClipboardText: (text: string) => Promise<void>
 			writeClipboardImage?: (dataUrl: string) => void
+			getSettings: () => Promise<AppSettingsPayload>
+			updateSettings: (settings: AppSettingsUpdatePayload) => Promise<AppSettingsPayload>
+			restartApp: () => Promise<void>
+			getSpeechModelStatus: () => Promise<SpeechModelStatusPayload>
+			loadSpeechModel: () => Promise<SpeechModelStatusPayload>
+			transcribeSpeechChunk: (payload: SpeechAudioChunkPayload) => Promise<SpeechTranscriptResult>
+			onSpeechModelStatusChange: (listener: (status: SpeechModelStatusPayload) => void) => () => void
 			windowControl: (action: WindowControlAction) => Promise<void>
 			getWindowState: () => Promise<WindowStatePayload>
 			onWindowStateChange: (listener: (state: WindowStatePayload) => void) => () => void
