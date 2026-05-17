@@ -52,10 +52,43 @@ function vadAssetsPlugin() {
   }
 }
 
+function appIconPlugin() {
+  const iconPath = path.join(__dirname, 'build', 'icon.png')
+
+  return {
+    name: 'eqoustics-app-icon',
+    configureServer(server) {
+      server.middlewares.use('/icon.png', (_request, response, next) => {
+        if (!fs.existsSync(iconPath)) {
+          next()
+          return
+        }
+
+        response.setHeader('content-type', 'image/png')
+        fs.createReadStream(iconPath)
+          .on('error', next)
+          .pipe(response)
+      })
+    },
+    generateBundle() {
+      if (!fs.existsSync(iconPath)) {
+        return
+      }
+
+      this.emitFile({
+        type: 'asset',
+        fileName: 'icon.png',
+        source: fs.readFileSync(iconPath),
+      })
+    },
+  }
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    appIconPlugin(),
     vadAssetsPlugin(),
     electron({
       main: {

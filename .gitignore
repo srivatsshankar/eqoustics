@@ -5,7 +5,10 @@ node_modules/
 dist/
 dist-electron/
 out/
-build/
+build/*
+!build/icon.png
+!build/icon.ico
+!build/icon.svg
 release/
 release/**/win-unpacked/
 
@@ -24,6 +27,7 @@ app.asar
 .env.*
 .eqoustics-python/
 .eqoustics-python-cache/
+.eqoustics-python-package/
 .eqoustics-python-portable/
 
 # Logs

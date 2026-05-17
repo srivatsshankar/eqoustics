@@ -58,6 +58,13 @@ interface QueuedSpeechSegment {
   audioSamples: Float32Array
 }
 
+interface PreparedVad {
+  key: string
+  promise: Promise<MicVAD>
+}
+
+type SpeechInputPreparationState = 'idle' | 'loading' | 'ready'
+
 interface LightweightSpeechRecognitionResult {
   transcript: string
 }
@@ -199,6 +206,18 @@ function vadAssetBasePath() {
   return new URL('vad/', window.location.href).href
 }
 
+function microphoneConstraints(deviceId?: string | null): MediaStreamConstraints {
+  return {
+    audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      channelCount: 1,
+      echoCancellation: true,
+      autoGainControl: true,
+      noiseSuppression: true,
+    },
+  }
+}
+
 function lightweightSpeechRecognitionConstructor(): LightweightSpeechRecognitionConstructor | null {
   const speechWindow = window as Window & {
     SpeechRecognition?: LightweightSpeechRecognitionConstructor
@@ -239,6 +258,7 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [lastError, setLastError] = useState<string | null>(null)
   const [speechTooltip, setSpeechTooltip] = useState<SpeechTooltip | null>(null)
+  const [speechInputPreparationState, setSpeechInputPreparationState] = useState<SpeechInputPreparationState>('idle')
   const [modelStatus, setModelStatus] = useState<SpeechModelStatusPayload>({
     state: 'idle',
     modelId: SPEECH_MODEL_ID,
@@ -246,10 +266,13 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
   })
 
   const vadRef = useRef<MicVAD | null>(null)
+  const preparedVadRef = useRef<PreparedVad | null>(null)
   const wakeRecognitionRef = useRef<LightweightSpeechRecognition | null>(null)
   const speechQueueRef = useRef<QueuedSpeechSegment[]>([])
   const isProcessingQueueRef = useRef(false)
   const isStartingListeningRef = useRef(false)
+  const isListeningRef = useRef(false)
+  const isVadAudioInitializedRef = useRef(false)
   const listeningSessionRef = useRef(0)
   const dragStateRef = useRef<DragState | null>(null)
   const hasSavedPositionRef = useRef(initialPositionRef.current.isSaved)
@@ -494,7 +517,7 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
 
   useEffect(() => {
     hideSpeechTooltip()
-  }, [hideSpeechTooltip, isListening, lastError, modelStatus.state])
+  }, [hideSpeechTooltip, isListening, lastError, modelStatus.state, speechInputPreparationState])
 
   useEffect(() => {
     let isMounted = true
@@ -597,18 +620,126 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
     setMicrophoneLevel(nextLevel)
   }, [])
 
-  const stopListening = useCallback(() => {
+  const prepareSpeechVad = useCallback(() => {
+    const key = microphoneDeviceId ?? ''
+    if (vadRef.current && preparedVadRef.current?.key === key) {
+      setSpeechInputPreparationState('ready')
+      return Promise.resolve(vadRef.current)
+    }
+    if (preparedVadRef.current?.key === key) {
+      setSpeechInputPreparationState('loading')
+      return preparedVadRef.current.promise
+    }
+    if (vadRef.current) {
+      const previousVad = vadRef.current
+      vadRef.current = null
+      if (isVadAudioInitializedRef.current) {
+        isVadAudioInitializedRef.current = false
+        void previousVad.destroy().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          setLastError(message)
+        })
+      }
+    }
+
+    setSpeechInputPreparationState('loading')
+    const assetBasePath = vadAssetBasePath()
+    const streamConstraints = microphoneConstraints(microphoneDeviceId)
+    const promise = MicVAD.new({
+      model: 'v5',
+      startOnLoad: false,
+      baseAssetPath: assetBasePath,
+      onnxWASMBasePath: assetBasePath,
+      positiveSpeechThreshold: 0.5,
+      negativeSpeechThreshold: 0.35,
+      redemptionMs: 650,
+      preSpeechPadMs: 300,
+      minSpeechMs: 180,
+      submitUserSpeechOnPause: true,
+      ortConfig: (ort) => {
+        ort.env.logLevel = 'error'
+        ort.env.wasm.numThreads = 1
+        ort.env.wasm.proxy = false
+        ort.env.wasm.wasmPaths = {
+          mjs: `${assetBasePath}ort-wasm-simd-threaded.jsep.mjs`,
+          wasm: `${assetBasePath}ort-wasm-simd-threaded.jsep.wasm`,
+        }
+      },
+      getStream: () => navigator.mediaDevices.getUserMedia(streamConstraints),
+      resumeStream: () => navigator.mediaDevices.getUserMedia(streamConstraints),
+      pauseStream: async (stream) => {
+        stream.getTracks().forEach((track) => track.stop())
+      },
+      onSpeechEnd: (audio) => {
+        if (!isListeningRef.current) return
+
+        if (isSilentModeRef.current) {
+          clearSpeechQueue()
+          if (!isWakeRecognitionActiveRef.current) {
+            processWakeCommandSegment(audio, VAD_SAMPLE_RATE_HZ)
+          }
+          return
+        }
+        enqueueSpeechSegment(audio, VAD_SAMPLE_RATE_HZ)
+      },
+      onVADMisfire: () => undefined,
+      onSpeechStart: () => undefined,
+      onSpeechRealStart: () => undefined,
+      onFrameProcessed: (_probabilities, frame) => {
+        if (!isListeningRef.current) return
+        updateMicrophoneLevel(frame)
+      },
+    }).then((vad) => {
+      if (preparedVadRef.current?.promise === promise) {
+        vadRef.current = vad
+        setSpeechInputPreparationState('ready')
+      }
+      return vad
+    }).catch((error: unknown) => {
+      if (preparedVadRef.current?.promise === promise) {
+        setSpeechInputPreparationState('idle')
+      }
+      throw error
+    })
+
+    preparedVadRef.current = { key, promise }
+    return promise
+  }, [
+    clearSpeechQueue,
+    enqueueSpeechSegment,
+    microphoneDeviceId,
+    processWakeCommandSegment,
+    updateMicrophoneLevel,
+  ])
+
+  useEffect(() => {
+    if (disabled || isListening || isStartingListeningRef.current || modelStatus.state !== 'ready') return
+
+    void prepareSpeechVad().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      setLastError(message)
+    })
+  }, [disabled, isListening, modelStatus.state, prepareSpeechVad])
+
+  const stopListening = useCallback((releaseVad = false) => {
     isStartingListeningRef.current = false
+    isListeningRef.current = false
     listeningSessionRef.current += 1
     clearSpeechQueue()
     stopWakeCommandRecognition()
     const vad = vadRef.current
-    vadRef.current = null
-    if (vad) {
-      void vad.destroy().catch((error: unknown) => {
+    if (vad && isVadAudioInitializedRef.current) {
+      const stopVad = releaseVad ? vad.destroy() : vad.pause()
+      void stopVad.catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
         setLastError(message)
       })
+    }
+    if (releaseVad) {
+      vadRef.current = null
+      preparedVadRef.current = null
+      isVadAudioInitializedRef.current = false
+      setSpeechInputPreparationState('idle')
     }
 
     isSilentModeRef.current = false
@@ -618,10 +749,10 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
     setIsListening(false)
   }, [clearSpeechQueue, stopWakeCommandRecognition])
 
-  stopListeningRef.current = stopListening
+  stopListeningRef.current = () => stopListening()
 
   const startListening = useCallback(async () => {
-    if (disabled || isListening || isStartingListeningRef.current || vadRef.current) return
+    if (disabled || isListeningRef.current || isStartingListeningRef.current) return
     if (modelStatus.state !== 'ready') return
 
     isStartingListeningRef.current = true
@@ -635,76 +766,34 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
     microphoneLevelRef.current = 0
     setMicrophoneLevel(0)
     onBeforeListenRef.current?.()
-    const assetBasePath = vadAssetBasePath()
     try {
-      const vad = await MicVAD.new({
-        model: 'v5',
-        startOnLoad: false,
-        baseAssetPath: assetBasePath,
-        onnxWASMBasePath: assetBasePath,
-        positiveSpeechThreshold: 0.5,
-        negativeSpeechThreshold: 0.35,
-        redemptionMs: 650,
-        preSpeechPadMs: 300,
-        minSpeechMs: 180,
-        submitUserSpeechOnPause: true,
-        ortConfig: (ort) => {
-          ort.env.logLevel = 'error'
-          ort.env.wasm.numThreads = 1
-          ort.env.wasm.proxy = false
-          ort.env.wasm.wasmPaths = {
-            mjs: `${assetBasePath}ort-wasm-simd-threaded.jsep.mjs`,
-            wasm: `${assetBasePath}ort-wasm-simd-threaded.jsep.wasm`,
-          }
-        },
-        getStream: () => navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: microphoneDeviceId ? { exact: microphoneDeviceId } : undefined,
-            channelCount: 1,
-            echoCancellation: true,
-            autoGainControl: true,
-            noiseSuppression: true,
-          },
-        }),
-        onSpeechEnd: (audio) => {
-          if (listeningSessionRef.current !== listeningSession) return
-
-          if (isSilentModeRef.current) {
-            clearSpeechQueue()
-            if (!isWakeRecognitionActiveRef.current) {
-              processWakeCommandSegment(audio, VAD_SAMPLE_RATE_HZ)
-            }
-            return
-          }
-          enqueueSpeechSegment(audio, VAD_SAMPLE_RATE_HZ)
-        },
-        onVADMisfire: () => undefined,
-        onSpeechStart: () => undefined,
-        onSpeechRealStart: () => undefined,
-        onFrameProcessed: (_probabilities, frame) => {
-          if (listeningSessionRef.current !== listeningSession) return
-          updateMicrophoneLevel(frame)
-        },
-      })
+      const vad = await prepareSpeechVad()
 
       if (listeningSessionRef.current !== listeningSession) {
-        await vad.destroy()
         return
       }
 
       vadRef.current = vad
+      isListeningRef.current = true
       await vad.start()
+      isVadAudioInitializedRef.current = true
       if (listeningSessionRef.current !== listeningSession || vadRef.current !== vad) {
-        await vad.destroy()
+        await vad.pause()
+        isListeningRef.current = false
         return
       }
       setIsListening(true)
+    } catch (error) {
+      if (listeningSessionRef.current === listeningSession) {
+        isListeningRef.current = false
+      }
+      throw error
     } finally {
       if (listeningSessionRef.current === listeningSession) {
         isStartingListeningRef.current = false
       }
     }
-  }, [clearSpeechQueue, disabled, enqueueSpeechSegment, isListening, microphoneDeviceId, modelStatus.state, processWakeCommandSegment, stopWakeCommandRecognition, updateMicrophoneLevel])
+  }, [clearSpeechQueue, disabled, modelStatus.state, prepareSpeechVad, stopWakeCommandRecognition])
 
   useEffect(() => {
     if (disabled && isListening) {
@@ -712,7 +801,7 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
     }
   }, [disabled, isListening, stopListening])
 
-  useEffect(() => stopListening, [stopListening])
+  useEffect(() => () => stopListening(true), [stopListening])
 
   const handleToggleListening = () => {
     hideSpeechTooltip()
@@ -776,16 +865,23 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
   }
 
   const statusClass = isSilentMode ? 'silent' : isListening ? 'listening' : lastError ? 'error' : isProcessing ? 'processing' : modelStatus.state
+  const currentVadKey = microphoneDeviceId ?? ''
+  const isSpeechInputReady = speechInputPreparationState === 'ready'
+    && preparedVadRef.current?.key === currentVadKey
+    && vadRef.current !== null
+  const isPreparingSpeechInput = modelStatus.state === 'ready' && !disabled && !isSpeechInputReady && !lastError
+  const speechWindowStatusClass = isPreparingSpeechInput ? 'loading' : statusClass
   const modelProgress = typeof modelStatus.loadProgress === 'number'
     ? Math.max(0, Math.min(100, modelStatus.loadProgress))
     : null
-  const showMicButton = modelStatus.state === 'ready' && !lastError
+  const showMicButton = modelStatus.state === 'ready' && (disabled || isSpeechInputReady) && !lastError
   const showErrorIcon = Boolean(lastError)
-  const loaderLabel = loaderLabelForStatus(modelStatus, lastError)
+  const loaderLabel = isPreparingSpeechInput ? 'Preparing microphone' : loaderLabelForStatus(modelStatus, lastError)
   const loadedLabel = modelProgress !== null
     ? `${modelProgress}%`
     : formatMegabytes(modelStatus.loadedBytes ?? 0)
   const showLoadingProgress = modelStatus.state === 'loading' && modelStatus.loadStage === 'downloading'
+  const showDownloadStatus = showLoadingProgress && !lastError
   const loadingTitle = `${loaderLabel}${showLoadingProgress ? `: ${loadedLabel}` : ''}`
   const micLabel = isSilentMode ? 'Listen' : isListening ? 'Disable microphone' : 'Activate microphone'
   const errorTitle = lastError ?? 'Speech model error'
@@ -794,86 +890,100 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
   } as CSSProperties
 
   return (
-    <div
-      ref={windowRef}
-      className={`floating-speech-window floating-speech-window-${statusClass}`}
-      style={{ left: position.x, top: position.y }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-    >
-      <span className="speech-window-drag-handle" aria-hidden="true">
-        <FontAwesomeIcon icon={faGripVertical} />
-      </span>
-      {showMicButton ? (
-        <span
-          className="speech-window-tooltip-wrap"
-          onMouseEnter={(event) => showSpeechTooltip(micLabel, event.currentTarget)}
-          onMouseLeave={hideSpeechTooltip}
-          onFocusCapture={(event) => showSpeechTooltip(micLabel, event.currentTarget)}
-          onBlurCapture={hideSpeechTooltip}
-        >
-          <button
-            type="button"
-            className="speech-window-mic-button"
-            disabled={disabled}
-            aria-label={micLabel}
-            aria-pressed={isListening}
-            style={isListening ? microphoneLevelStyle : undefined}
-            onClick={handleToggleListening}
+    <>
+      <div
+        ref={windowRef}
+        className={`floating-speech-window floating-speech-window-${speechWindowStatusClass}`}
+        style={{ left: position.x, top: position.y }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
+        <span className="speech-window-drag-handle" aria-hidden="true">
+          <FontAwesomeIcon icon={faGripVertical} />
+        </span>
+        {showMicButton ? (
+          <span
+            className="speech-window-tooltip-wrap"
+            onMouseEnter={(event) => showSpeechTooltip(micLabel, event.currentTarget)}
+            onMouseLeave={hideSpeechTooltip}
+            onFocusCapture={(event) => showSpeechTooltip(micLabel, event.currentTarget)}
+            onBlurCapture={hideSpeechTooltip}
           >
-            <FontAwesomeIcon className="speech-window-mic-icon" icon={isListening ? faMicrophone : faMicrophoneSlash} />
-          </button>
-        </span>
-      ) : showErrorIcon ? (
-        <span
-          className="speech-window-tooltip-wrap"
-          onMouseEnter={(event) => showSpeechTooltip(errorTitle, event.currentTarget)}
-          onMouseLeave={hideSpeechTooltip}
-          onFocusCapture={(event) => showSpeechTooltip(errorTitle, event.currentTarget)}
-          onBlurCapture={hideSpeechTooltip}
-        >
-          <div
-            className="speech-window-state-icon speech-window-error-icon"
-            role="status"
-            aria-label={errorTitle}
-            tabIndex={0}
+            <button
+              type="button"
+              className="speech-window-mic-button"
+              disabled={disabled}
+              aria-label={micLabel}
+              aria-pressed={isListening}
+              style={isListening ? microphoneLevelStyle : undefined}
+              onClick={handleToggleListening}
+            >
+              <FontAwesomeIcon className="speech-window-mic-icon" icon={isListening ? faMicrophone : faMicrophoneSlash} />
+            </button>
+          </span>
+        ) : showErrorIcon ? (
+          <span
+            className="speech-window-tooltip-wrap"
+            onMouseEnter={(event) => showSpeechTooltip(errorTitle, event.currentTarget)}
+            onMouseLeave={hideSpeechTooltip}
+            onFocusCapture={(event) => showSpeechTooltip(errorTitle, event.currentTarget)}
+            onBlurCapture={hideSpeechTooltip}
           >
-            <FontAwesomeIcon icon={faCircleExclamation} />
-          </div>
-        </span>
-      ) : (
-        <span
-          className="speech-window-tooltip-wrap"
-          onMouseEnter={(event) => showSpeechTooltip(loadingTitle, event.currentTarget)}
-          onMouseLeave={hideSpeechTooltip}
-          onFocusCapture={(event) => showSpeechTooltip(loadingTitle, event.currentTarget)}
-          onBlurCapture={hideSpeechTooltip}
-        >
-          <div
-            className="speech-window-state-icon speech-window-loader"
-            role="status"
-            aria-label={loadingTitle}
-            tabIndex={0}
+            <div
+              className="speech-window-state-icon speech-window-error-icon"
+              role="status"
+              aria-label={errorTitle}
+              tabIndex={0}
+            >
+              <FontAwesomeIcon icon={faCircleExclamation} />
+            </div>
+          </span>
+        ) : (
+          <span
+            className="speech-window-tooltip-wrap"
+            onMouseEnter={(event) => showSpeechTooltip(loadingTitle, event.currentTarget)}
+            onMouseLeave={hideSpeechTooltip}
+            onFocusCapture={(event) => showSpeechTooltip(loadingTitle, event.currentTarget)}
+            onBlurCapture={hideSpeechTooltip}
           >
-            <span className="speech-window-loader-spinner" aria-hidden="true" />
-          </div>
-        </span>
-      )}
-      {speechTooltip ? (
-        <span
-          className={`dropdown-floating-tooltip speech-floating-tooltip${speechTooltip.placement === 'below' ? ' dropdown-floating-tooltip-below' : ''}`}
-          role="tooltip"
-          style={{
-            top: `${speechTooltip.top}px`,
-            left: `${speechTooltip.left}px`,
-            maxWidth: `${speechTooltip.maxWidth}px`,
-          }}
-        >
-          {speechTooltip.title}
-        </span>
+            <div
+              className="speech-window-state-icon speech-window-loader"
+              role="status"
+              aria-label={loadingTitle}
+              tabIndex={0}
+            >
+              <span className="speech-window-loader-spinner" aria-hidden="true" />
+            </div>
+          </span>
+        )}
+        {speechTooltip ? (
+          <span
+            className={`dropdown-floating-tooltip speech-floating-tooltip${speechTooltip.placement === 'below' ? ' dropdown-floating-tooltip-below' : ''}`}
+            role="tooltip"
+            style={{
+              top: `${speechTooltip.top}px`,
+              left: `${speechTooltip.left}px`,
+              maxWidth: `${speechTooltip.maxWidth}px`,
+            }}
+          >
+            {speechTooltip.title}
+          </span>
+        ) : null}
+      </div>
+      {showDownloadStatus ? (
+        <div className="speech-model-download-status" role="status" aria-live="polite">
+          <span>Eqoustics is downloading the Gemma model.</span>
+          <strong>{loadedLabel}</strong>
+          <small>Please wait.</small>
+          {modelProgress !== null ? (
+            <span className="speech-model-download-progress" aria-hidden="true">
+              <span style={{ width: `${modelProgress}%` }} />
+            </span>
+          ) : null}
+        </div>
       ) : null}
-    </div>
+    </>
   )
 }

@@ -3,6 +3,7 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.eqoustics.beta",
   "asar": true,
+  "compression": "store",
   "productName": "Eqoustics",
   "directories": {
     "output": "release/beta/${version}"
@@ -22,9 +23,10 @@
     }
   ],
   "win": {
+    "icon": "build/icon.ico",
     "target": [
       {
-        "target": "nsis",
+        "target": "dir",
         "arch": [
           "x64"
         ]
@@ -37,14 +39,8 @@
       }
     ]
   },
-  "nsis": {
-    "artifactName": "${productName}-Beta-Windows-Setup-${version}.${ext}",
-    "oneClick": false,
-    "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
-  },
   "portable": {
-    "artifactName": "${productName}-Beta-Windows-Portable-${version}.${ext}"
+    "artifactName": "${productName}-Beta-Windows-Portable-${version}.${ext}",
+    "splashImage": "build/portable-splash.bmp"
   }
 }

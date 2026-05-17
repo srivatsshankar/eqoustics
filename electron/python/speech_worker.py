@@ -43,6 +43,13 @@ DEFAULT_COMMANDS = [
         ],
     },
     {
+        "command": "go-to-end",
+        "name": "go to end",
+        "category": "navigation",
+        "description": "Move the cursor to the last row of the document.",
+        "aliases": ["go to last row", "go to last line", "go to bottom"],
+    },
+    {
         "command": "bold-that",
         "name": "bold that",
         "category": "formatting",
@@ -83,6 +90,27 @@ DEFAULT_COMMANDS = [
         "category": "formatting",
         "description": "Apply underline formatting to the entire current row.",
         "aliases": ["underline line", "underlined row", "underlined line"],
+    },
+    {
+        "command": "capitalize-row",
+        "name": "capitalize row",
+        "category": "formatting",
+        "description": "Capitalize each word in the current row.",
+        "aliases": ["capitalize that", "capitalize line", "title case row", "title case that", "title case line"],
+    },
+    {
+        "command": "sentence-case-row",
+        "name": "sentence case",
+        "category": "formatting",
+        "description": "Capitalize the first word in the current row.",
+        "aliases": ["sentence case row", "sentence case that", "sentence case line"],
+    },
+    {
+        "command": "lowercase-row",
+        "name": "lowercase row",
+        "category": "formatting",
+        "description": "Lowercase the current row.",
+        "aliases": ["lowercase that", "lowercase line", "lower case row", "lower case that", "lower case line"],
     },
     {
         "command": "heading-1",
@@ -127,6 +155,13 @@ DEFAULT_COMMANDS = [
         "aliases": ["delete line", "remove row", "remove line"],
     },
     {
+        "command": "clear-row",
+        "name": "clear row",
+        "category": "formatting",
+        "description": "Clear the current row without deleting it.",
+        "aliases": ["clear line"],
+    },
+    {
         "command": "bullet-that",
         "name": "bullet that",
         "category": "formatting",
@@ -139,6 +174,13 @@ DEFAULT_COMMANDS = [
         "category": "formatting",
         "description": "Apply numbered list formatting to the current row.",
         "aliases": ["number row", "number line", "numbering that", "numbered list that"],
+    },
+    {
+        "command": "correction",
+        "name": "correction",
+        "category": "formatting",
+        "description": "Tell the LaTeX processor to update the current row instead of inserting new content.",
+        "aliases": ["correct", "edit", "fix"],
     },
     {
         "command": "save-document",
@@ -174,6 +216,13 @@ DEFAULT_COMMANDS = [
         "category": "navigation",
         "description": "Redo the last undone action.",
         "aliases": ["redo"],
+    },
+    {
+        "command": "type-correction",
+        "name": "type correction {text}",
+        "category": "formatting",
+        "description": "Correct the current row as written text instead of converting the correction to LaTeX math.",
+        "aliases": ["type correction", "text correction {text}", "correct text {text}", "fix text {text}"],
     },
     {
         "command": "type-text",
@@ -289,44 +338,6 @@ NUMBER_WORDS = {
 }
 
 NUMBER_PHRASE_WORDS = set(NUMBER_WORDS) | {"and", "hundred", *NUMBER_SCALES}
-SPOKEN_ARTICLES = {"a", "an", "the"}
-SPOKEN_MATH_FILLER_WORDS = {"by", "sign", "symbol"}
-
-MATH_PHRASE_OPERATORS = {}
-# MATH_PHRASE_OPERATORS = {
-#     "literal symbol equals": "=",
-#     "literal symbol equal": "=",
-#     "literal equals sign": "=",
-#     "literal equal sign": "=",
-#     "the equals sign": "=",
-#     "the equal sign": "=",
-#     "equals symbol": "=",
-#     "equal symbol": "=",
-#     "equals sign": "=",
-#     "equal sign": "=",
-#     "literal equals": "=",
-#     "literal equal": "=",
-#     "equals": "=",
-#     "equal to": "=",
-#     "equal": "=",
-#     "is equal to": "=",
-#     "is equals to": "=",
-#     "plus": "+",
-#     "minus": "-",
-#     "negative": "-",
-#     "multiply by": "\\times",
-#     "times": "\\times",
-#     "multiplied by": "\\times",
-#     "multiply": "\\times",
-#     "multiplication": "\\times",
-#     "division": "\\div",
-#     "divide by": "\\div",
-#     "divide": "\\div",
-#     "divided by": "\\div",
-#     "over": "/",
-#     "less than": "<",
-#     "greater than": ">",
-# }
 
 
 def build_transcription_prompt():
@@ -347,12 +358,14 @@ END
 
 Rules:
 - This is a math editor. Treat math dictation as LaTeX, not prose.
+- Default to LaTeX for any transcript that can reasonably be interpreted as symbolic, mathematical, or notation-like.
 - Never return NO_LATEX for variables, numbers with operators, equations, fractions, powers, roots, integrals, sums, matrices, Greek letters, sets, logic, or speech operator phrases.
 - Use REPLACE_ROW for corrections/edits/removals/replacements of the current row. Call get_current_row_latex first, then return the full corrected row.
 - For context-dependent insertions like continue, append, complete, or insert after the current expression, call get_current_row_latex first.
 - For standalone math dictation, do not call tools; convert directly to LaTeX.
 - Mathematical speech returns raw LaTeX only, without $, $$, \\[, \\], \\(, or \\).
 - Preserve spoken relation operators. "equals", "equal to", "equals sign", and "literal symbol equals" must produce = in the matching location.
+- Preserve normal spoken math operators instead of omitting them or replacing them with plain words. Use standard LaTeX notation such as +, -, \\times, \\div, /, <, >, \\leq, \\geq, \\neq, \\approx, \\pm, \\cdot, \\in, \\subset, \\cup, \\cap, and \\rightarrow when the transcript calls for them.
 - Only plain non-math prose returns LATEX: NO_LATEX. Do not wrap prose in \\text{}.
 - Matrices use standard LaTeX environments, \\\\ row separators, and & cells.
 
@@ -378,6 +391,16 @@ ACTION: INSERT
 LATEX: + 5
 END
 
+Transcript: equals 125
+ACTION: INSERT
+LATEX: = 125
+END
+
+Transcript: x times y divided by z
+ACTION: INSERT
+LATEX: x \\times y \\div z
+END
+
 Transcript: x equals y
 ACTION: INSERT
 LATEX: x = y
@@ -390,6 +413,72 @@ END
 
 Transcript:
 """ + (transcript or "")).strip()
+
+
+def build_text_correction_prompt(correction, current_row_latex=None):
+    current_row_text = latex_plain_text_to_text(current_row_latex or "")
+    return f"""
+Correct the current Eqoustics row as ordinary written text.
+Return exactly:
+TEXT: <full corrected row text>
+END
+
+Rules:
+- Use the correction request to edit the current row text.
+- Return the full corrected row text, not just the changed words.
+- Do not return LaTeX, Markdown, JSON, explanations, labels other than TEXT, or apologies.
+- Preserve the user's wording unless the correction request changes it.
+- Apply normal sentence capitalization and punctuation for written text.
+
+Current row text:
+{current_row_text}
+
+Correction request:
+{correction or ""}
+""".strip()
+
+
+def plain_text_to_latex(text):
+    converted = []
+    for char in str(text or ""):
+        if char == "\\":
+            converted.append("\\textbackslash{}")
+        elif char in {"{", "}"}:
+            converted.append(f"\\{char}")
+        else:
+            converted.append(char)
+    return "".join(converted)
+
+
+def latex_plain_text_to_text(latex):
+    text = str(latex or "")
+    text = text.replace("\\textbackslash{}", "\\")
+    text = text.replace("\\{", "{").replace("\\}", "}")
+    return text
+
+
+def should_capitalize_inserted_text(current_row_latex):
+    current_text = latex_plain_text_to_text(current_row_latex or "").rstrip()
+    if not current_text:
+        return True
+    return re.search(r"[.!?][\"')\]}]*$", current_text) is not None
+
+
+def capitalize_spoken_plain_text(text, current_row_latex=None):
+    chars = list(str(text or ""))
+    capitalize_next = should_capitalize_inserted_text(current_row_latex)
+    opening_punctuation = set("\"'([{")
+
+    for index, char in enumerate(chars):
+        if char.isspace() or char in opening_punctuation:
+            continue
+        if capitalize_next and char.isalpha():
+            chars[index] = char.upper()
+        capitalize_next = False
+        if char in ".!?":
+            capitalize_next = True
+
+    return re.sub(r"\bi\b", "I", "".join(chars))
 
 
 engine = None
@@ -869,6 +958,20 @@ def send_latex_workflow_message(message, current_row_latex=None):
         return response_text(conversation.send_message(message))
 
 
+def send_text_correction_message(message):
+    try:
+        with engine.create_conversation(automatic_tool_calling=False) as conversation:
+            streamed_text = stream_response_text_until_end(conversation, message)
+            if streamed_text:
+                return streamed_text
+    except Exception as exc:
+        if speech_timing_enabled():
+            print(f"[speech timing] text-correction-stream-fallback error={exc}", file=sys.stderr, flush=True)
+
+    with engine.create_conversation(automatic_tool_calling=False) as conversation:
+        return response_text(conversation.send_message(message))
+
+
 def parse_json_response(text):
     stripped = (text or "").strip()
     stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
@@ -1152,6 +1255,42 @@ def normalize_phrase(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
+COMMAND_TOKEN_ALTERNATES = {
+    "2": {"2", "two", "to", "too"},
+    "two": {"2", "two", "to", "too"},
+    "to": {"2", "two", "to", "too"},
+    "too": {"2", "two", "to", "too"},
+    "4": {"4", "four", "for"},
+    "four": {"4", "four", "for"},
+    "for": {"4", "four", "for"},
+}
+
+
+def command_tokens_match(pattern_tokens, transcript_tokens):
+    if len(pattern_tokens) != len(transcript_tokens):
+        return False
+
+    for pattern_token, transcript_token in zip(pattern_tokens, transcript_tokens):
+        if pattern_token == transcript_token:
+            continue
+        if transcript_token in COMMAND_TOKEN_ALTERNATES.get(pattern_token, set()):
+            continue
+        return False
+    return True
+
+
+def command_number_from_text(value):
+    normalized = normalize_phrase(value)
+    homophone_numbers = {
+        "to": 2,
+        "too": 2,
+        "for": 4,
+    }
+    if normalized in homophone_numbers:
+        return homophone_numbers[normalized]
+    return number_from_text(value)
+
+
 def parse_under_hundred_number(words):
     if not words:
         return None
@@ -1175,7 +1314,19 @@ def parse_under_thousand_number(words):
         return None
 
     if "hundred" not in words:
-        return parse_under_hundred_number(words)
+        under_hundred = parse_under_hundred_number(words)
+        if under_hundred is not None:
+            return under_hundred
+        if (
+            len(words) >= 2
+            and words[0] in NUMBER_UNITS
+            and NUMBER_UNITS[words[0]] > 0
+            and (words[1] in NUMBER_TENS or words[1] in NUMBER_TEENS)
+        ):
+            rest_value = parse_under_hundred_number(words[1:])
+            if rest_value is not None:
+                return NUMBER_UNITS[words[0]] * 100 + rest_value
+        return None
 
     hundred_index = words.index("hundred")
     if hundred_index != 1 or words[0] not in NUMBER_UNITS or NUMBER_UNITS[words[0]] == 0:
@@ -1217,309 +1368,6 @@ def number_from_text(value):
     return total + rest_value
 
 
-def replace_spoken_numbers(value):
-    text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", str(value or "").lower())
-    tokens = re.findall(r"\\[a-z]+|[a-z0-9_]+|[^\w\s]", text)
-    if not tokens:
-        return ""
-
-    converted = []
-    index = 0
-    while index < len(tokens):
-        if tokens[index] not in NUMBER_PHRASE_WORDS:
-            converted.append(tokens[index])
-            index += 1
-            continue
-
-        best_value = None
-        best_end = index
-        for end in range(index + 1, len(tokens) + 1):
-            phrase_tokens = tokens[index:end]
-            if any(token not in NUMBER_PHRASE_WORDS for token in phrase_tokens):
-                break
-
-            number = number_from_text(" ".join(phrase_tokens))
-            if number is not None:
-                best_value = number
-                best_end = end
-
-        if best_value is None:
-            converted.append(tokens[index])
-            index += 1
-            continue
-
-        converted.append(str(best_value))
-        index = best_end
-
-    return " ".join(converted)
-
-
-def sorted_math_phrase_operators():
-    return sorted(MATH_PHRASE_OPERATORS.items(), key=lambda item: len(item[0]), reverse=True)
-
-
-def replace_spoken_operator_phrases(value):
-    text = normalize_phrase(value)
-    if not text:
-        return ""
-
-    for phrase, operator in sorted_math_phrase_operators():
-        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
-        text = re.sub(rf"(?<!\S){escaped_phrase}(?!\S)", lambda _match: f" {operator} ", text)
-
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def spoken_math_words_to_latex(value):
-    text = replace_spoken_operator_phrases(value)
-    if not text:
-        return ""
-
-    text = re.sub(r"\b([a-z])\s+squared\b", r"\1^2", text)
-    text = re.sub(r"\b([a-z])\s+cubed\b", r"\1^3", text)
-    return replace_spoken_numbers(text)
-
-
-def simple_math_phrase_to_latex(transcript):
-    normalized = re.sub(r"\s+", " ", str(transcript or "").strip().lower())
-    if not normalized:
-        return None
-
-    for phrase, operator in sorted_math_phrase_operators():
-        if normalized == phrase:
-            return operator
-        if normalized.startswith(f"{phrase} "):
-            rest = spoken_math_words_to_latex(str(transcript or "").strip()[len(phrase):].strip())
-            return f"{operator} {rest}" if rest else operator
-
-    latex = spoken_math_words_to_latex(transcript)
-    if latex != normalize_phrase(transcript) and looks_like_latex_or_math_source(latex):
-        return latex
-
-    return None
-
-
-def meaningful_spoken_math_words(value):
-    return [
-        word for word in normalize_phrase(value).split()
-        if word not in SPOKEN_ARTICLES and word not in SPOKEN_MATH_FILLER_WORDS
-    ]
-
-
-def transcript_is_only_spoken_operator(transcript, operator):
-    normalized = " ".join(meaningful_spoken_math_words(transcript))
-    if not normalized:
-        return False
-
-    for phrase, phrase_operator in sorted_math_phrase_operators():
-        if phrase_operator == operator and normalized == normalize_phrase(phrase):
-            return True
-    return False
-
-
-def spoken_operator_requirements(transcript):
-    normalized = normalize_phrase(transcript)
-    requirements = []
-    for phrase, operator in sorted_math_phrase_operators():
-        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
-        if re.search(rf"(?<!\S){escaped_phrase}(?!\S)", normalized) and operator not in requirements:
-            requirements.append(operator)
-    return requirements
-
-
-def split_spoken_operator(transcript, operator):
-    normalized = normalize_phrase(transcript)
-    for phrase, phrase_operator in sorted_math_phrase_operators():
-        if phrase_operator != operator:
-            continue
-
-        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
-        match = re.search(rf"(?<!\S){escaped_phrase}(?!\S)", normalized)
-        if match:
-            return normalized[:match.start()].strip(), normalized[match.end():].strip()
-
-    return None, None
-
-
-def first_spoken_latex_candidates(spoken_text):
-    words = meaningful_spoken_math_words(spoken_text)
-    if not words:
-        return []
-
-    candidates = []
-    first = words[0]
-    if first.isdigit():
-        base = first
-    elif first in NUMBER_PHRASE_WORDS:
-        base = None
-        for end in range(1, len(words) + 1):
-            if any(word not in NUMBER_PHRASE_WORDS for word in words[:end]):
-                break
-            number = number_from_text(" ".join(words[:end]))
-            if number is not None:
-                base = str(number)
-    elif len(first) == 1 and first.isalpha():
-        base = first
-    else:
-        base = None
-
-    if base:
-        if len(words) > 1 and words[1] == "squared":
-            candidates.extend([f"{base}^2", f"{base}^{{2}}"])
-        elif len(words) > 1 and words[1] == "cubed":
-            candidates.extend([f"{base}^3", f"{base}^{{3}}"])
-        candidates.append(base)
-
-    converted = spoken_math_words_to_latex(" ".join(words))
-    if converted:
-        first_term = re.split(r"\s*(?:=|\+|-|\\times|\\div|/|<|>)\s*", converted, maxsplit=1)[0].strip()
-        if first_term:
-            candidates.insert(0, first_term)
-
-    unique_candidates = []
-    for candidate in candidates:
-        if candidate and candidate not in unique_candidates:
-            unique_candidates.append(candidate)
-    return unique_candidates
-
-
-def latex_spacing_pattern(value):
-    return r"\s*".join(re.escape(part) for part in re.split(r"\s+", value.strip()) if part)
-
-
-def latex_power_brace_variants(value):
-    variants = [value]
-    braced = re.sub(r"([A-Za-z0-9])\^([0-9])", r"\1^{\2}", value)
-    if braced != value:
-        variants.append(braced)
-    return variants
-
-
-def spoken_latex_prefix_candidates(spoken_text):
-    converted = spoken_math_words_to_latex(spoken_text)
-    if not converted:
-        return []
-
-    candidates = []
-    for variant in latex_power_brace_variants(converted):
-        candidates.append(variant)
-        compact = re.sub(r"\s+", "", variant)
-        if compact != variant:
-            candidates.append(compact)
-
-    unique_candidates = []
-    for candidate in sorted(candidates, key=len, reverse=True):
-        if candidate and candidate not in unique_candidates:
-            unique_candidates.append(candidate)
-    return unique_candidates
-
-
-def insertion_index_after_left_spoken(latex, left_spoken):
-    for candidate in spoken_latex_prefix_candidates(left_spoken):
-        match = re.match(latex_spacing_pattern(candidate), latex)
-        if not match:
-            continue
-        if match.end() > 0 and latex[match.end():].strip():
-            return match.end()
-
-    return None
-
-
-def is_safe_latex_candidate_match(latex, match):
-    before = latex[match.start() - 1] if match.start() > 0 else ""
-    after = latex[match.end()] if match.end() < len(latex) else ""
-    if before == "\\" or before.isalpha() or after.isalpha():
-        return False
-    return True
-
-
-def insert_missing_operator_before_rhs(latex, transcript, operator):
-    left_spoken, right_spoken = split_spoken_operator(transcript, operator)
-    if right_spoken is None:
-        return None
-    if not left_spoken:
-        return f"{operator} {latex.lstrip()}"
-
-    left_index = insertion_index_after_left_spoken(latex, left_spoken)
-    if left_index is not None:
-        return f"{latex[:left_index].rstrip()} {operator} {latex[left_index:].lstrip()}"
-
-    for candidate in first_spoken_latex_candidates(right_spoken):
-        matches = [match for match in re.finditer(re.escape(candidate), latex)]
-        for match in matches:
-            if match.start() == 0:
-                continue
-            if not is_safe_latex_candidate_match(latex, match):
-                continue
-            return f"{latex[:match.start()].rstrip()} {operator} {latex[match.start():].lstrip()}"
-
-    return None
-
-
-def latex_rhs_matches_spoken(rhs, right_spoken):
-    for candidate in first_spoken_latex_candidates(right_spoken):
-        if re.match(latex_spacing_pattern(candidate), rhs.lstrip()):
-            return True
-    return False
-
-
-def repair_existing_operator_position(latex, transcript, operator):
-    left_spoken, right_spoken = split_spoken_operator(transcript, operator)
-    if not left_spoken or not right_spoken or operator not in latex:
-        return latex
-
-    without_operator = re.sub(rf"\s*{re.escape(operator)}\s*", " ", latex, count=1)
-    left_index = insertion_index_after_left_spoken(without_operator, left_spoken)
-    if left_index is None:
-        return latex
-
-    repaired = f"{without_operator[:left_index].rstrip()} {operator} {without_operator[left_index:].lstrip()}"
-    if latex_rhs_matches_spoken(repaired.split(operator, 1)[1], right_spoken):
-        return repaired
-    return latex
-
-
-def remove_unspoken_repeated_rhs(latex, transcript):
-    if "=" not in latex:
-        return latex
-
-    _left_spoken, right_spoken = split_spoken_operator(transcript, "=")
-    if not right_spoken:
-        return latex
-
-    right_words = normalize_phrase(right_spoken).split()
-    for candidate in first_spoken_latex_candidates(right_spoken):
-        if not candidate or right_words.count(right_words[0]) > 1:
-            continue
-
-        escaped_candidate = re.escape(candidate)
-        latex = re.sub(rf"(=\s*)({escaped_candidate})(\s+)\2(?![A-Za-z0-9])", r"\1\2", latex)
-    return latex
-
-
-def repair_latex_with_spoken_operators(transcript, latex):
-    if not latex:
-        return latex
-
-    for operator in spoken_operator_requirements(transcript):
-        if transcript_is_only_spoken_operator(transcript, operator):
-            return operator
-        if operator in latex:
-            latex = repair_existing_operator_position(latex, transcript, operator)
-            continue
-
-        repaired = insert_missing_operator_before_rhs(latex, transcript, operator)
-        if repaired:
-            latex = repaired
-            continue
-
-        fallback = simple_math_phrase_to_latex(transcript)
-        if fallback and operator in fallback:
-            latex = fallback
-
-    return remove_unspoken_repeated_rhs(latex, transcript)
-
-
 def phrase_match(pattern, transcript):
     normalized_pattern = normalize_phrase(pattern)
     normalized_transcript = normalize_phrase(transcript)
@@ -1542,29 +1390,47 @@ def phrase_match(pattern, transcript):
         return {"text": text} if text else None
 
     if "__number__" not in normalized_pattern:
-        return {} if normalized_pattern == normalized_transcript else None
+        pattern_tokens = normalized_pattern.split()
+        transcript_tokens = normalized_transcript.split()
+        return {} if command_tokens_match(pattern_tokens, transcript_tokens) else None
 
-    escaped = re.escape(normalized_pattern).replace("__number__", r"(?P<number>[a-z0-9\s]+)")
-    match = re.fullmatch(escaped, normalized_transcript)
-    if not match:
+    pattern_tokens = normalized_pattern.split()
+    transcript_tokens = normalized_transcript.split()
+    try:
+        number_index = pattern_tokens.index("__number__")
+    except ValueError:
         return None
 
-    row_number = number_from_text(match.group("number"))
+    prefix_tokens = pattern_tokens[:number_index]
+    suffix_tokens = pattern_tokens[number_index + 1:]
+    if len(transcript_tokens) <= len(prefix_tokens) + len(suffix_tokens):
+        return None
+    if not command_tokens_match(prefix_tokens, transcript_tokens[:len(prefix_tokens)]):
+        return None
+    if suffix_tokens and not command_tokens_match(suffix_tokens, transcript_tokens[-len(suffix_tokens):]):
+        return None
+
+    number_end = len(transcript_tokens) - len(suffix_tokens) if suffix_tokens else len(transcript_tokens)
+    row_number = command_number_from_text(" ".join(transcript_tokens[len(prefix_tokens):number_end]))
     if not row_number or row_number < 1:
         return None
     return {"rowNumber": row_number}
 
 
-def lookup_command_action(transcript, db_path):
+def lookup_command_action(transcript, db_path, current_row_latex=None):
     for command in cached_commands(db_path):
         for phrase in [command["name"], *command["aliases"]]:
             match = phrase_match(phrase, transcript)
             if match is None:
                 continue
 
+            if command["command"] == "type-correction":
+                return {"type": "type-correction", "text": match.get("text", "")}
             if command["command"] == "type-text":
-                text = match.get("text", "")
+                text = capitalize_spoken_plain_text(match.get("text", ""), current_row_latex)
                 return {"type": "insert", "insertMode": "text", "text": text}
+            if command["command"] == "correction":
+                return None
 
             action = {"type": "command", "command": command["command"]}
             action.update(match)
@@ -1655,6 +1521,27 @@ def normalize_latex_workflow_result(raw_text):
     if latex and not looks_like_latex_or_math_source(latex):
         latex = None
     return {"parsed": False, "action": "insert", "latex": latex}
+
+
+def normalize_text_correction_result(raw_text):
+    text = (raw_text or "").strip()
+    text = re.sub(r"^```(?:text|plaintext)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    if is_explanatory_or_apology(text):
+        return None
+
+    match = re.search(r"(?:^|\n)\s*TEXT\s*:\s*(?P<text>[\s\S]*?)(?:\n\s*END\s*:?\s*$|$)", text, flags=re.IGNORECASE)
+    if match:
+        return match.group("text").strip()
+
+    parsed = parse_json_response(text)
+    if isinstance(parsed, dict):
+        value = parsed.get("text") or parsed.get("rowText") or parsed.get("correctedText")
+        if value is not None:
+            return str(value).strip()
+
+    text = re.sub(r"(?im)^\s*END\s*:?\s*$", "", text).strip()
+    return re.sub(r"^\s*TEXT\s*:\s*", "", text, flags=re.IGNORECASE).strip()
 
 
 def normalize_latex_result(raw_text):
@@ -2066,6 +1953,30 @@ def build_transformers_latex_workflow_prompt(transcript, current_row_latex=None)
     return f"Current row LaTeX:\n{current_row_latex}\n\n{build_latex_workflow_prompt(transcript)}"
 
 
+def run_text_correction(correction, current_row_latex=None):
+    prompt = build_text_correction_prompt(correction, current_row_latex)
+    message = {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": prompt,
+            },
+        ],
+    }
+
+    if engine_runtime == "transformers":
+        response = transformers_generate(transformers_text_messages(prompt), 256)
+    else:
+        response = send_text_correction_message(message)
+
+    corrected_text = normalize_text_correction_result(response)
+    if corrected_text is None:
+        return None
+
+    return plain_text_to_latex(corrected_text)
+
+
 def run_transcription(command):
     if engine is None:
         raise RuntimeError("Speech model has not been loaded.")
@@ -2099,9 +2010,17 @@ def run_transcription(command):
             return {"transcript": "", "action": {"type": "ignore"}}
 
         command_started = time.perf_counter()
-        command_action = lookup_command_action(transcript, command_database_path(command))
+        command_action = lookup_command_action(transcript, command_database_path(command), command.get("currentRowLatex"))
         log_timing("command-lookup", command_started)
         if command_action:
+            if command_action.get("type") == "type-correction":
+                correction_started = time.perf_counter()
+                corrected_latex = run_text_correction(command_action.get("text"), command.get("currentRowLatex"))
+                log_timing("text-correction-pass", correction_started)
+                if corrected_latex is not None:
+                    result_label = "replace-row:text-correction"
+                    return {"transcript": transcript, "action": {"type": "replace-row", "latex": corrected_latex}}
+
             result_label = f"command:{command_action.get('command')}"
             return {"transcript": transcript, "action": command_action}
 
@@ -2129,8 +2048,6 @@ def run_transcription(command):
 
         latex_result = normalize_latex_workflow_result(latex_response_text)
         latex = latex_result["latex"]
-        if latex:
-            latex = repair_latex_with_spoken_operators(transcript, latex)
 
         if latex_result["action"] == "replace-row" and latex:
             result_label = "replace-row"
@@ -2139,11 +2056,6 @@ def run_transcription(command):
         if latex:
             result_label = "insert:latex"
             return {"transcript": transcript, "action": {"type": "insert", "insertMode": "latex", "text": latex}}
-
-        simple_math_latex = simple_math_phrase_to_latex(transcript)
-        if simple_math_latex:
-            result_label = "insert:simple-math"
-            return {"transcript": transcript, "action": {"type": "insert", "insertMode": "latex", "text": simple_math_latex}}
 
         result_label = "insert:text"
         return {"transcript": transcript, "action": {"type": "insert", "insertMode": "text", "text": transcript}}

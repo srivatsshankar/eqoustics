@@ -6,6 +6,7 @@ import https from 'node:https'
 
 const rootDir = process.cwd()
 const venvDir = path.join(rootDir, '.eqoustics-python')
+const packageVenvDir = path.join(rootDir, '.eqoustics-python-package')
 const portablePythonDir = path.join(rootDir, '.eqoustics-python-portable')
 const cacheDir = path.join(rootDir, '.eqoustics-python-cache')
 const requirementsPath = path.join(rootDir, 'electron', 'python', 'requirements-speech.txt')
@@ -13,9 +14,14 @@ const isWindows = process.platform === 'win32'
 const venvPython = isWindows
   ? path.join(venvDir, 'Scripts', 'python.exe')
   : path.join(venvDir, 'bin', 'python')
+const packageVenvPython = isWindows
+  ? path.join(packageVenvDir, 'Scripts', 'python.exe')
+  : path.join(packageVenvDir, 'bin', 'python')
 const portablePython = path.join(portablePythonDir, 'python.exe')
 const torchIndexUrl = process.env.EQOUSTICS_TORCH_INDEX_URL || 'https://download.pytorch.org/whl/cu128'
+const portableTorchIndexUrl = process.env.EQOUSTICS_PORTABLE_TORCH_INDEX_URL || 'https://download.pytorch.org/whl/cpu'
 const skipPortable = process.argv.includes('--skip-portable')
+const forcePrepare = process.env.EQOUSTICS_FORCE_PYTHON_PREPARE === '1'
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -109,11 +115,11 @@ function pythonBaseCommand() {
   throw new Error('[Eqoustics] Python 3 was not found. Install Python 3, then retry.')
 }
 
-function localVenvHasSpeechDependencies() {
-  if (!existsSync(venvPython)) return false
-
+function speechDependencyCheckScript(options = {}) {
   const pythonIsWindows = isWindows ? 'True' : 'False'
-  const dependencyCheck = `
+  const requireCuda = options.requireCuda ? 'True' : 'False'
+  const rejectCuda = options.rejectCuda ? 'True' : 'False'
+  return `
 import importlib.util
 import sys
 missing = [
@@ -123,11 +129,78 @@ missing = [
 if missing:
     sys.exit(1)
 import torch
-if ${pythonIsWindows} and torch.version.cuda is None:
+if ${pythonIsWindows} and ${requireCuda} and torch.version.cuda is None:
+    sys.exit(1)
+if ${pythonIsWindows} and ${rejectCuda} and torch.version.cuda is not None:
     sys.exit(1)
 sys.exit(0)
 `
-  return Boolean(run(venvPython, ['-c', dependencyCheck], { optional: true, quiet: true }))
+}
+
+function pythonHasSpeechDependencies(pythonPath, options = {}) {
+  if (!existsSync(pythonPath)) return false
+
+  return Boolean(run(pythonPath, ['-B', '-c', speechDependencyCheckScript(options)], { optional: true, quiet: true }))
+}
+
+function localVenvHasSpeechDependencies() {
+  return pythonHasSpeechDependencies(venvPython, { requireCuda: isWindows })
+}
+
+function packageVenvHasSpeechDependencies() {
+  return pythonHasSpeechDependencies(packageVenvPython, { rejectCuda: isWindows })
+}
+
+function portablePythonHasSpeechDependencies() {
+  return pythonHasSpeechDependencies(portablePython, { rejectCuda: isWindows })
+}
+
+async function withHeartbeat(label, task) {
+  const startedAt = Date.now()
+  const heartbeat = setInterval(() => {
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000)
+    console.log(`[Eqoustics] ${label}... elapsed ${elapsedSeconds}s.`)
+  }, 30_000)
+
+  try {
+    return await task()
+  } finally {
+    clearInterval(heartbeat)
+  }
+}
+
+async function prunePythonCacheFiles(root) {
+  if (!existsSync(root)) return
+
+  let removedCount = 0
+  async function walk(directory) {
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === '__pycache__') {
+          await rm(entryPath, { recursive: true, force: true })
+          removedCount += 1
+        } else {
+          await walk(entryPath)
+        }
+      } else if (entry.isFile() && /\.(?:pyc|pyo)$/i.test(entry.name)) {
+        await rm(entryPath, { force: true })
+        removedCount += 1
+      }
+    }
+  }
+
+  await withHeartbeat('Still pruning Python bytecode caches from the portable runtime', () => walk(root))
+  if (removedCount > 0) {
+    console.log(`[Eqoustics] Removed ${removedCount} Python bytecode cache entries from the portable runtime.`)
+  }
 }
 
 async function configurePortablePythonPath() {
@@ -150,10 +223,41 @@ async function configurePortablePythonPath() {
   )
 }
 
-async function prepareWindowsPortablePython() {
+function installSpeechDependencies(pythonPath, selectedTorchIndexUrl) {
+  console.log('[Eqoustics] Updating Python packaging tools...')
+  run(pythonPath, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel'])
+
+  if (isWindows) {
+    console.log(`[Eqoustics] Installing PyTorch from ${selectedTorchIndexUrl}`)
+    run(pythonPath, [
+      '-m',
+      'pip',
+      'install',
+      '--upgrade',
+      'torch',
+      'torchvision',
+      '--index-url',
+      selectedTorchIndexUrl,
+    ])
+  }
+
+  if (existsSync(requirementsPath)) {
+    console.log('[Eqoustics] Installing Python speech dependencies...')
+    run(pythonPath, ['-m', 'pip', 'install', '-r', requirementsPath])
+  }
+}
+
+function ensureVirtualEnvironment(targetDir, targetPython, basePython) {
+  if (existsSync(targetPython)) return
+
+  console.log(`[Eqoustics] Creating Python virtual environment at ${targetDir}`)
+  run(basePython.command, [...basePython.args, '-m', 'venv', targetDir])
+}
+
+async function prepareWindowsPortablePython(sourceVenvDir, sourcePython) {
   if (!isWindows) return
 
-  const pythonVersion = runOutput(venvPython, [
+  const pythonVersion = runOutput(sourcePython, [
     '-c',
     'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")',
   ])
@@ -179,15 +283,18 @@ async function prepareWindowsPortablePython() {
   ])
 
   await mkdir(path.join(portablePythonDir, 'Lib'), { recursive: true })
-  await cp(
-    path.join(venvDir, 'Lib', 'site-packages'),
+  console.log('[Eqoustics] Copying Python packages into the portable runtime...')
+  await withHeartbeat('Still copying Python packages into the portable runtime', () => cp(
+    path.join(sourceVenvDir, 'Lib', 'site-packages'),
     path.join(portablePythonDir, 'Lib', 'site-packages'),
     { recursive: true, force: true },
-  )
+  ))
+  await prunePythonCacheFiles(path.join(portablePythonDir, 'Lib', 'site-packages'))
   await configurePortablePythonPath()
 
   console.log('[Eqoustics] Verifying self-contained portable Python runtime...')
   run(portablePython, [
+    '-B',
     '-c',
     'import torch, torchvision, transformers, accelerate, librosa, PIL, litert_lm; print(torch.__version__); print(torch.cuda.is_available())',
   ])
@@ -196,44 +303,43 @@ async function prepareWindowsPortablePython() {
 async function main() {
   await mkdir(path.dirname(venvDir), { recursive: true })
 
-  if (skipPortable && localVenvHasSpeechDependencies()) {
-    console.log('[Eqoustics] Local Python virtual environment is ready for development.')
+  const basePython = pythonBaseCommand()
+
+  if (skipPortable) {
+    ensureVirtualEnvironment(venvDir, venvPython, basePython)
+
+    if (!forcePrepare && localVenvHasSpeechDependencies()) {
+      console.log('[Eqoustics] Local Python virtual environment is ready for development.')
+      return
+    }
+
+    installSpeechDependencies(venvPython, torchIndexUrl)
+    console.log('[Eqoustics] Skipping portable Python runtime preparation for development mode.')
     return
   }
 
-  const basePython = pythonBaseCommand()
+  const packageReady = packageVenvHasSpeechDependencies()
+  const portableReady = isWindows && portablePythonHasSpeechDependencies()
 
-  if (!existsSync(venvPython)) {
-    console.log(`[Eqoustics] Creating local Python virtual environment at ${venvDir}`)
-    run(basePython.command, [...basePython.args, '-m', 'venv', venvDir])
+  if (!forcePrepare && packageReady && portableReady) {
+    await prunePythonCacheFiles(path.join(portablePythonDir, 'Lib', 'site-packages'))
+    console.log('[Eqoustics] CPU package and portable Python runtimes are ready for packaging.')
+    return
   }
 
-  console.log('[Eqoustics] Updating local Python packaging tools...')
-  run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel'])
+  ensureVirtualEnvironment(packageVenvDir, packageVenvPython, basePython)
 
-  if (isWindows) {
-    console.log(`[Eqoustics] Installing CUDA-enabled PyTorch into the local virtual environment from ${torchIndexUrl}`)
-    run(venvPython, [
-      '-m',
-      'pip',
-      'install',
-      '--upgrade',
-      'torch',
-      'torchvision',
-      '--index-url',
-      torchIndexUrl,
-    ])
-  }
-
-  if (existsSync(requirementsPath)) {
-    console.log('[Eqoustics] Installing Python speech dependencies into the local virtual environment...')
-    run(venvPython, ['-m', 'pip', 'install', '-r', requirementsPath])
-  }
-
-  if (skipPortable) {
-    console.log('[Eqoustics] Skipping portable Python runtime preparation for development mode.')
+  if (forcePrepare || !packageVenvHasSpeechDependencies()) {
+    installSpeechDependencies(packageVenvPython, portableTorchIndexUrl)
   } else {
-    await prepareWindowsPortablePython()
+    console.log('[Eqoustics] CPU package Python virtual environment already has speech dependencies.')
+  }
+
+  if (!forcePrepare && portablePythonHasSpeechDependencies()) {
+    await prunePythonCacheFiles(path.join(portablePythonDir, 'Lib', 'site-packages'))
+    console.log('[Eqoustics] Portable Python runtime already has speech dependencies.')
+  } else {
+    await prepareWindowsPortablePython(packageVenvDir, packageVenvPython)
   }
 }
 

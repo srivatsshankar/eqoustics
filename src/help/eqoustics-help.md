@@ -37,22 +37,70 @@ Eqoustics is a notebook-style mathematics editor. Each row is stored as LaTeX in
 - Use bullet and numbered list buttons for list formatting.
 - Use the hyperlink button to add a link to selected text.
 
+## Settings
+
+Open `Settings` from the menu bar to control application preferences.
+
+| Setting | What it controls |
+| --- | --- |
+| Microphone | Chooses the input device used by the floating microphone. `System default` follows the operating system's selected input device. |
+| Refresh microphones | Re-scans available audio input devices after connecting, disconnecting, or granting permission for a microphone. |
+| Appearance | Sets the app theme. `Light` and `Dark` force a theme, while `System` follows the operating system preference. |
+| Gemma Model | Chooses the speech model size. `Gemma 2B` is the default recommendation for most computers; `Gemma 4B` may improve recognition but can need more memory and load time. |
+| Acceleration | Chooses where speech inference runs. `GPU` uses graphics hardware when supported; `CPU` uses the processor and is useful when GPU support is unavailable or unstable. |
+| Inference runtime | Chooses the speech inference engine. `LiteRT` is the default and uses the local LiteRT model package; `Transformers` uses Hugging Face Gemma checkpoints. |
+| Transformers MTP | Appears only when `Transformers` is selected. `On` enables the Gemma assistant drafter model for speculative decoding; `Off` loads only the main Transformers model. |
+
+Changing the Gemma model, acceleration, inference runtime, or Transformers MTP can require an app restart before the new speech settings are used.
+
 ## Microphone
 
 The floating microphone window controls speech recognition. Click the microphone to start listening. Eqoustics records speech chunks, sends them to Gemma, then inserts the result into the active row.
 
-When speech starts for the first time, Gemma may need to load. If the selected runtime uses Transformers, the Gemma model may also need to download from Hugging Face into the local cache. Loading or downloading can take time, especially on first run. The speech control shows progress while the model is preparing.
+When Eqoustics starts, it loads the selected Gemma model before speech transcription is ready. This can take some time, so the microphone may show a loading state before it can listen.
+
+The first time Eqoustics starts, or after changing the Gemma model, acceleration, inference runtime, or Transformers MTP setting, the selected model may need to download before it can load. While a download is running, Eqoustics shows a small status in the bottom-right corner with the download progress. Wait for the download and model loading to finish before starting speech transcription.
 
 ## Speech commands
 
-Speech commands control the notebook without typing. Open the `Commands` menu to see the live command list and aliases. Common commands include:
+Speech commands control the notebook without typing. Open the `Commands` menu to see the live command list, built-in aliases, and any aliases created on this computer.
 
-- `new line`, `newline`, `new row`, or `next line` to create a row below the current row.
-- `new paragraph` or `next paragraph` to create a blank row for a new paragraph.
-- `go to row five`, `go to line five`, `select row five`, or `select line five` to move to a numbered row.
-- `silence` to keep the microphone active while ignoring dictation.
-- `listen` to resume processing after silence mode.
-- `deactivate microphone`, `disable microphone`, `turn off microphone`, or `stop listening` to turn speech recognition off.
+| Command | What it does | Aliases |
+| --- | --- | --- |
+| `new line` | Create a new row below the current row. | `newline`, `new row`, `next line` |
+| `new paragraph` | Create a blank row after the current row for a new paragraph. | `next paragraph`, `new para` |
+| `go to row {number}` | Move the cursor to the requested row number. | `go to line {number}`, `go row {number}`, `go line {number}`, `select line {number}`, `select row {number}` |
+| `go to end` | Move the cursor to the last row of the document. | `go to last row`, `go to last line`, `go to bottom` |
+| `bold that` | Apply bold formatting to the last entered text or typed word. | `make that bold` |
+| `italic that` | Apply italic formatting to the last entered text or typed word. | `italics that`, `make that italic`, `make that italics` |
+| `underline that` | Apply underline formatting to the last entered text or typed word. | `underlined that`, `make that underlined` |
+| `bold row` | Apply bold formatting to the entire current row. | `bold line` |
+| `italic row` | Apply italic formatting to the entire current row. | `italics row`, `italic line`, `italics line` |
+| `underline row` | Apply underline formatting to the entire current row. | `underline line`, `underlined row`, `underlined line` |
+| `heading 1` | Convert the current row to heading level 1. | `heading one`, `heading level 1`, `heading level one` |
+| `heading 2` | Convert the current row to heading level 2. | `heading two`, `heading level 2`, `heading level two` |
+| `heading 3` | Convert the current row to heading level 3. | `heading three`, `heading level 3`, `heading level three` |
+| `heading 4` | Convert the current row to heading level 4. | `heading four`, `heading level 4`, `heading level four` |
+| `delete that` | Delete the last entered text or typed word. | `remove that` |
+| `delete row` | Delete the entire current row. | `delete line`, `remove row`, `remove line` |
+| `clear row` | Clear the current row without deleting it. | `clear line` |
+| `bullet that` | Apply bullet list formatting to the current row. | `bullet row`, `bullet line` |
+| `number that` | Apply numbered list formatting to the current row. | `number row`, `number line`, `numbering that`, `numbered list that` |
+| `correction` | Tell the LaTeX processor to update the current row instead of inserting new content. | `correct`, `edit`, `fix` |
+| `save` | Save the current document. | `save document` |
+| `save as` | Open the save-as prompt for the current document. | `save document as` |
+| `open document` | Open the document picker. | `open file` |
+| `undo that` | Undo the last action. | `undo` |
+| `redo that` | Redo the last undone action. | `redo` |
+| `type {text}` | Type the following text verbatim without converting it to LaTeX. | None |
+| `help me` | Toggle the help menu. | `open help` |
+| `close help` | Close the help menu. | `hide help` |
+| `minimize window` | Minimize the application window. | `minimise window` |
+| `maximize window` | Maximize or restore the application window. | `maximise window` |
+| `close window` | Close the application window. | None |
+| `silence` | Keep the microphone active but ignore speech until the listen command is heard. | `silent` |
+| `listen` | Resume processing speech after silence mode. | `start listening` |
+| `deactivate microphone` | Turn off speech recognition. | `disable microphone`, `turn off microphone`, `stop listening` |
 
 ## Dictating LaTeX
 

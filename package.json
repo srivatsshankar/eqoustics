@@ -2,14 +2,16 @@
   "name": "eqoustics",
   "private": true,
   "version": "0.0.0-beta.0",
+  "description": "A WYSIWYG math notebook editor with speech-to-LaTeX dictation.",
+  "author": "Srivats Shankar",
   "type": "module",
   "scripts": {
     "dev": "node scripts/run-dev.mjs",
     "prepare:python": "node scripts/prepare-python-env.mjs",
     "prepare:python:dev": "node scripts/prepare-python-env.mjs --skip-portable",
     "build": "npm run build:win",
-    "build:app": "tsc && vite build",
-    "build:win": "npm run build:app && npm run prepare:python && electron-builder --win",
+    "build:app": "node scripts/prepare-icons.mjs && tsc && vite build",
+    "build:win": "npm run build:app && npm run prepare:python && node scripts/build-windows-portable.mjs",
     "build:all": "npm run build:win",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"

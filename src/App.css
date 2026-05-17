@@ -1336,6 +1336,64 @@
   }
 }
 
+.speech-model-download-status {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 1.1rem;
+  z-index: 23;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.18rem 0.62rem;
+  width: min(20rem, calc(100% - 2.5rem));
+  box-sizing: border-box;
+  padding: 0.65rem 0.72rem;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.97);
+  color: #1f2937;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  pointer-events: none;
+}
+
+.speech-model-download-status span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.speech-model-download-status strong {
+  color: #2563eb;
+  font-size: 0.86rem;
+  line-height: 1;
+  text-align: right;
+}
+
+.speech-model-download-status small {
+  grid-column: 1 / -1;
+  color: #64748b;
+  font-size: 0.74rem;
+  line-height: 1.25;
+}
+
+.speech-model-download-progress {
+  grid-column: 1 / -1;
+  height: 0.26rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.speech-model-download-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 160ms ease-out;
+}
+
 .gemma-processing-indicator.cell-button-tooltip-wrap {
   position: absolute;
   display: inline-flex;
@@ -3553,6 +3611,29 @@ sub.math-script {
 :root[data-appearance='dark'] .speech-window-loader-spinner {
   border-color: rgba(248, 250, 252, 0.22);
   border-top-color: currentColor;
+}
+
+:root[data-appearance='dark'] .speech-model-download-status {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: #1f2937;
+  color: #e5e7eb;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-appearance='dark'] .speech-model-download-status strong {
+  color: #93c5fd;
+}
+
+:root[data-appearance='dark'] .speech-model-download-status small {
+  color: #94a3b8;
+}
+
+:root[data-appearance='dark'] .speech-model-download-progress {
+  background: rgba(147, 197, 253, 0.16);
+}
+
+:root[data-appearance='dark'] .speech-model-download-progress span {
+  background: #93c5fd;
 }
 
 :root[data-appearance='dark'] .gemma-processing-indicator {

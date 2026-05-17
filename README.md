@@ -1,6 +1,6 @@
 # Eqoustics
 
-A Notion-style WYSIWYG math notebook editor with speech-to-LaTeX dictation. Write math the way you speak it.
+A WYSIWYG math notebook editor with speech-to-LaTeX dictation. Write math the way you speak it.
 
 ---
 
@@ -56,12 +56,6 @@ The easiest way to test Eqoustics is to run the Windows portable executable from
 release/beta/0.0.0-beta.0/Eqoustics-Beta-Windows-Portable-0.0.0-beta.0.exe
 ```
 
-You can also use the Windows installer:
-
-```text
-release/beta/0.0.0-beta.0/Eqoustics-Beta-Windows-Setup-0.0.0-beta.0.exe
-```
-
 ### Option 2: Install Dependencies and Run Development Mode
 
 Use this path if you want to run from source with hot reloading.
@@ -111,7 +105,7 @@ If dependencies are already installed, you can build directly:
 npm run build:win
 ```
 
-The Windows build command also prepares `.eqoustics-python` before packaging. It then creates a self-contained `.eqoustics-python-portable` runtime from the embeddable Windows Python package and includes it in the executable resources as `python-venv`, so the packaged app can run on machines without Python installed.
+The Windows build command also prepares `.eqoustics-python` before packaging. It then creates a self-contained `.eqoustics-python-portable` runtime from the embeddable Windows Python package and embeds it in the portable executable as `python-venv`, so external users can run Eqoustics without installing Python or the speech packages. Portable packaging can take several minutes because that runtime is large; the build prints periodic `Still packaging...` messages while the executable is being assembled.
 
 Build artifacts are written to:
 

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, ipcMain, protocol, session } from 'electron'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -94,6 +95,16 @@ function publishWindowState(window: BrowserWindow) {
   window.webContents.send(IPC_CHANNELS.windowStateChanged, getWindowState(window))
 }
 
+function getAppIconPath() {
+  const iconPath = VITE_DEV_SERVER_URL
+    ? path.join(process.env.APP_ROOT, 'build', 'icon.png')
+    : path.join(RENDERER_DIST, 'icon.png')
+
+  return existsSync(iconPath)
+    ? iconPath
+    : path.join(process.env.VITE_PUBLIC, 'electron-vite.svg')
+}
+
 function registerWindowControlHandlers() {
   ipcMain.removeHandler(IPC_CHANNELS.windowControl)
   ipcMain.handle(IPC_CHANNELS.windowControl, (event, action: WindowControlAction) => {
@@ -134,7 +145,7 @@ function registerWindowControlHandlers() {
 
 function createWindow() {
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    icon: getAppIconPath(),
     backgroundColor: '#ffffff',
     frame: false,
     show: false,

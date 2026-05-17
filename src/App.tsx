@@ -234,6 +234,46 @@ function formatWholeRowLatex(latex: string, format: TextFormatCommand): string {
   return `${open}${latex}${close}`
 }
 
+type RowCaseTransform = 'capitalizeWords' | 'sentenceCase' | 'lowercase'
+
+function transformLatexRowTextCase(latex: string, transform: RowCaseTransform): string {
+  let result = ''
+  let capitalizeNextWord = transform === 'capitalizeWords' || transform === 'sentenceCase'
+  let transformedSentenceStart = false
+
+  for (let index = 0; index < latex.length; index += 1) {
+    const char = latex[index]
+    const commandMatch = /^\\[A-Za-z]+/.exec(latex.slice(index))
+    if (commandMatch) {
+      result += commandMatch[0]
+      index += commandMatch[0].length - 1
+      continue
+    }
+
+    if (!/[A-Za-z]/.test(char)) {
+      result += char
+      capitalizeNextWord = transform === 'capitalizeWords'
+        || (transform === 'sentenceCase' && !transformedSentenceStart)
+      continue
+    }
+
+    if (transform === 'lowercase') {
+      result += char.toLowerCase()
+      continue
+    }
+
+    if (capitalizeNextWord && (transform !== 'sentenceCase' || !transformedSentenceStart)) {
+      result += char.toUpperCase()
+      transformedSentenceStart = true
+    } else {
+      result += char
+    }
+    capitalizeNextWord = false
+  }
+
+  return result
+}
+
 function readStoredTableOfContentsOpen(): boolean {
   if (typeof window === 'undefined') return false
 
@@ -337,6 +377,8 @@ function App() {
   const [helpMenuRequest, setHelpMenuRequest] = useState<HelpMenuRequest | null>(null)
   const rowSelectionAnchorRef = useRef<string | null>(null)
   const lastActiveCellIdRef = useRef<string | null>(null)
+  const speechDocumentRef = useRef<NotebookDocument | null>(null)
+  const speechActiveCellIdRef = useRef<string | null>(null)
   const lastSpeechInsertionRef = useRef<LastSpeechInsertion | null>(null)
   const allowWindowCloseRef = useRef(false)
 
@@ -354,9 +396,11 @@ function App() {
       initialSpeechInferenceRuntimeRef.current = settings.speechInferenceRuntime
       initialTransformersMtpRef.current = settings.transformersMtp
       setDocument(nextDocument)
+      speechDocumentRef.current = nextDocument
       setFilePath(null)
       setDocumentRevision((current) => current + 1)
       setActiveCellId(nextDocument.cells[0]?.id ?? null)
+      speechActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
       lastActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
       setIsDirty(false)
       setIsBootstrapped(true)
@@ -364,6 +408,11 @@ function App() {
   }, [])
 
   useEffect(() => {
+    speechDocumentRef.current = document
+  }, [document])
+
+  useEffect(() => {
+    speechActiveCellIdRef.current = activeCellId
     if (activeCellId !== null) {
       lastActiveCellIdRef.current = activeCellId
     }
@@ -477,9 +526,11 @@ function App() {
 
   const replaceDocument = (nextDocument: NotebookDocument, nextPath: string | null) => {
     setDocument(nextDocument)
+    speechDocumentRef.current = nextDocument
     setFilePath(nextPath)
     setDocumentRevision((current) => current + 1)
     setActiveCellId(nextDocument.cells[0]?.id ?? null)
+    speechActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
     lastActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
     setUndoStack([])
     setRedoStack([])
@@ -594,6 +645,7 @@ function App() {
       })
 
       setDocument(nextDocument)
+      speechDocumentRef.current = nextDocument
       setFilePath(result.path)
       setIsDirty(false)
       await refreshRecentFiles()
@@ -610,6 +662,7 @@ function App() {
     }
 
     setDocument(nextDocument)
+    speechDocumentRef.current = nextDocument
     setFilePath(result.path)
     setIsDirty(false)
     await refreshRecentFiles()
@@ -706,10 +759,14 @@ function App() {
   const restoreHistoryEntry = useCallback((entry: HistoryEntry) => {
     const nextDocument = cloneDocument(entry.document)
     setDocument(nextDocument)
+    speechDocumentRef.current = nextDocument
     setDocumentRevision((current) => current + 1)
-    setActiveCellId(entry.activeCellId && nextDocument.cells.some((cell) => cell.id === entry.activeCellId)
+    const nextActiveCellId = entry.activeCellId && nextDocument.cells.some((cell) => cell.id === entry.activeCellId)
       ? entry.activeCellId
-      : nextDocument.cells[0]?.id ?? null)
+      : nextDocument.cells[0]?.id ?? null
+    setActiveCellId(nextActiveCellId)
+    speechActiveCellIdRef.current = nextActiveCellId
+    lastActiveCellIdRef.current = nextActiveCellId
     setPendingSelectionRestore(entry.selection)
     activeCellHandleRef.current = null
     typingHistoryGroupRef.current = null
@@ -878,8 +935,19 @@ function App() {
   const handleAddCell = (targetCellId: string, position: 'before' | 'after', initialLatex = '') => {
     const nextCell = createNotebookCell(initialLatex)
     setActiveCellId(nextCell.id)
+    speechActiveCellIdRef.current = nextCell.id
     lastActiveCellIdRef.current = nextCell.id
     focusCellEditorById(nextCell.id)
+
+    const speechDocument = speechDocumentRef.current
+    if (speechDocument) {
+      const targetIndex = speechDocument.cells.findIndex((cell) => cell.id === targetCellId)
+      if (targetIndex >= 0) {
+        const cells = [...speechDocument.cells]
+        cells.splice(targetIndex + (position === 'after' ? 1 : 0), 0, nextCell)
+        speechDocumentRef.current = { ...speechDocument, cells }
+      }
+    }
 
     updateDocument((current) => {
       const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
@@ -907,8 +975,19 @@ function App() {
     if (nextCells.length === 0) return
 
     setActiveCellId(nextCells[nextCells.length - 1].id)
+    speechActiveCellIdRef.current = nextCells[nextCells.length - 1].id
     lastActiveCellIdRef.current = nextCells[nextCells.length - 1].id
     focusCellEditorById(nextCells[nextCells.length - 1].id)
+
+    const speechDocument = speechDocumentRef.current
+    if (speechDocument) {
+      const targetIndex = speechDocument.cells.findIndex((cell) => cell.id === targetCellId)
+      if (targetIndex >= 0) {
+        const cells = [...speechDocument.cells]
+        cells.splice(targetIndex + 1, 0, ...nextCells)
+        speechDocumentRef.current = { ...speechDocument, cells }
+      }
+    }
 
     updateDocument((current) => {
       const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
@@ -932,6 +1011,9 @@ function App() {
   }
 
   const fallbackCellId = useCallback((sourceDocument: NotebookDocument) => {
+    if (speechActiveCellIdRef.current && sourceDocument.cells.some((cell) => cell.id === speechActiveCellIdRef.current)) {
+      return speechActiveCellIdRef.current
+    }
     if (activeCellId && sourceDocument.cells.some((cell) => cell.id === activeCellId)) {
       return activeCellId
     }
@@ -945,6 +1027,7 @@ function App() {
   const activateCellForExternalInput = useCallback((cellId: string | null) => {
     if (!cellId) return
 
+    speechActiveCellIdRef.current = cellId
     lastActiveCellIdRef.current = cellId
     setActiveCellId(cellId)
     setSelectedCellIds(new Set())
@@ -963,15 +1046,17 @@ function App() {
     const separator = currentLatex.length > 0 && text.length > 0 && !/\s$/.test(currentLatex) ? ' ' : ''
     const nextLatex = `${currentLatex}${separator}${text}`
     const insertedStart = currentLatex.length + separator.length
-
-    setSpeechCorrectionHighlight(null)
-    activateCellForExternalInput(cellId)
-    updateDocument((current) => ({
-      ...current,
+    const nextDocument = {
+      ...visibleDocument,
       cells: visibleDocument.cells.map((cell) => (
         cell.id === cellId ? { ...cell, latex: nextLatex } : cell
       )),
-    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'insert' })
+    }
+
+    setSpeechCorrectionHighlight(null)
+    activateCellForExternalInput(cellId)
+    speechDocumentRef.current = nextDocument
+    updateDocument((current) => ({ ...current, cells: nextDocument.cells }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'insert' })
     lastSpeechInsertionRef.current = trackSpeechInsertion
       ? { cellId, start: insertedStart, end: insertedStart + text.length }
       : null
@@ -997,21 +1082,24 @@ function App() {
     updater: (latex: string) => string,
     changeKind: CellChangeKind = 'format',
   ) => {
-    if (!document) return
+    const sourceDocument = speechDocumentRef.current ?? document
+    if (!sourceDocument) return
 
-    const visibleDocument = documentWithVisibleEditorState(document)
+    const visibleDocument = documentWithVisibleEditorState(sourceDocument)
     const currentCell = visibleDocument.cells.find((cell) => cell.id === cellId)
     if (!currentCell) return
 
     const nextLatex = updater(currentCell.latex ?? '')
-    setSpeechCorrectionHighlight(null)
-    activateCellForExternalInput(cellId)
-    updateDocument((current) => ({
-      ...current,
+    const nextDocument = {
+      ...visibleDocument,
       cells: visibleDocument.cells.map((cell) => (
         cell.id === cellId ? { ...cell, latex: nextLatex } : cell
       )),
-    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind })
+    }
+    setSpeechCorrectionHighlight(null)
+    activateCellForExternalInput(cellId)
+    speechDocumentRef.current = nextDocument
+    updateDocument((current) => ({ ...current, cells: nextDocument.cells }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind })
     focusCellEditorById(cellId)
   }, [activateCellForExternalInput, document, documentWithVisibleEditorState, focusCellEditorById, updateDocument])
 
@@ -1056,10 +1144,21 @@ function App() {
     updateCurrentRowLatexFromSpeechCommand(cellId, (latex) => formatWholeRowLatex(latex, format))
   }, [updateCurrentRowLatexFromSpeechCommand])
 
-  const handleDeleteRowCommand = useCallback((cellId: string) => {
-    if (!document) return
+  const handleRowCaseCommand = useCallback((cellId: string, transform: RowCaseTransform) => {
+    lastSpeechInsertionRef.current = null
+    updateCurrentRowLatexFromSpeechCommand(cellId, (latex) => transformLatexRowTextCase(latex, transform))
+  }, [updateCurrentRowLatexFromSpeechCommand])
 
-    const visibleDocument = documentWithVisibleEditorState(document)
+  const handleClearRowCommand = useCallback((cellId: string) => {
+    lastSpeechInsertionRef.current = null
+    updateCurrentRowLatexFromSpeechCommand(cellId, () => '', 'delete')
+  }, [updateCurrentRowLatexFromSpeechCommand])
+
+  const handleDeleteRowCommand = useCallback((cellId: string) => {
+    const sourceDocument = speechDocumentRef.current ?? document
+    if (!sourceDocument) return
+
+    const visibleDocument = documentWithVisibleEditorState(sourceDocument)
     const deletedIndex = visibleDocument.cells.findIndex((cell) => cell.id === cellId)
     if (deletedIndex < 0) return
 
@@ -1067,16 +1166,16 @@ function App() {
     const safeCells = remainingCells.length > 0 ? remainingCells : [createNotebookCell()]
     const nextFocusIndex = Math.max(0, Math.min(deletedIndex, safeCells.length - 1))
     const nextFocusCellId = safeCells[nextFocusIndex]?.id ?? null
+    const nextDocument = { ...visibleDocument, cells: safeCells }
 
     lastSpeechInsertionRef.current = null
     setSelectedCellIds(new Set())
     rowSelectionAnchorRef.current = null
     setActiveCellId(nextFocusCellId)
+    speechActiveCellIdRef.current = nextFocusCellId
     lastActiveCellIdRef.current = nextFocusCellId
-    updateDocument((current) => ({
-      ...current,
-      cells: safeCells,
-    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'delete' })
+    speechDocumentRef.current = nextDocument
+    updateDocument((current) => ({ ...current, cells: nextDocument.cells }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'delete' })
     if (nextFocusCellId) focusCellEditorById(nextFocusCellId)
   }, [document, documentWithVisibleEditorState, focusCellEditorById, updateDocument])
 
@@ -1093,6 +1192,12 @@ function App() {
       case 'go-to-row': {
         const rowIndex = Math.max(0, (rowNumber ?? 1) - 1)
         const nextCellId = document.cells[rowIndex]?.id ?? targetCellId
+        activateCellForExternalInput(nextCellId)
+        focusCellEditorById(nextCellId)
+        return
+      }
+      case 'go-to-end': {
+        const nextCellId = document.cells[document.cells.length - 1]?.id ?? targetCellId
         activateCellForExternalInput(nextCellId)
         focusCellEditorById(nextCellId)
         return
@@ -1115,6 +1220,15 @@ function App() {
       case 'underline-row':
         handleFormatRowCommand(targetCellId, 'underline')
         return
+      case 'capitalize-row':
+        handleRowCaseCommand(targetCellId, 'capitalizeWords')
+        return
+      case 'sentence-case-row':
+        handleRowCaseCommand(targetCellId, 'sentenceCase')
+        return
+      case 'lowercase-row':
+        handleRowCaseCommand(targetCellId, 'lowercase')
+        return
       case 'heading-1':
         handleFormatRowCommand(targetCellId, 'heading1')
         return
@@ -1132,6 +1246,9 @@ function App() {
         return
       case 'delete-row':
         handleDeleteRowCommand(targetCellId)
+        return
+      case 'clear-row':
+        handleClearRowCommand(targetCellId)
         return
       case 'bullet-that':
         handleFormatRowCommand(targetCellId, 'bulletList')
@@ -1170,6 +1287,8 @@ function App() {
         handleCloseWindow()
         return
       case 'type-text':
+      case 'correction':
+      case 'type-correction':
       case 'silence':
       case 'listen':
       case 'deactivate-microphone':
@@ -1182,10 +1301,12 @@ function App() {
     handleAddCellBelow,
     handleAddCellsBelow,
     handleCloseWindow,
+    handleClearRowCommand,
     handleDeleteRowCommand,
     handleDeleteThatCommand,
     handleFormatRowCommand,
     handleFormatThatCommand,
+    handleRowCaseCommand,
     handleOpenNotebook,
     handleRedo,
     handleUndo,
@@ -1193,9 +1314,10 @@ function App() {
   ])
 
   const handleSpeechResult = useCallback((result: SpeechRecognitionResult) => {
-    if (!document) return
+    const sourceDocument = speechDocumentRef.current ?? document
+    if (!sourceDocument) return
 
-    const targetCellId = fallbackCellId(document)
+    const targetCellId = fallbackCellId(sourceDocument)
     if (!targetCellId) return
     const { action } = result
     setSpeechCorrectionHighlight(null)
@@ -1207,16 +1329,18 @@ function App() {
 
     if (action.type === 'replace-row') {
       const { latex } = action
-      const visibleDocument = documentWithVisibleEditorState(document)
+      const visibleDocument = documentWithVisibleEditorState(sourceDocument)
       const previousLatex = visibleDocument.cells.find((cell) => cell.id === targetCellId)?.latex ?? ''
       const highlightRange = changedLatexRange(previousLatex, latex)
-      activateCellForExternalInput(targetCellId)
-      updateDocument((current) => ({
-        ...current,
+      const nextDocument = {
+        ...visibleDocument,
         cells: visibleDocument.cells.map((cell) => (
           cell.id === targetCellId ? { ...cell, latex } : cell
         )),
-      }), { captureVisibleEditorState: false, changedCellId: targetCellId, changeKind: 'insert' })
+      }
+      activateCellForExternalInput(targetCellId)
+      speechDocumentRef.current = nextDocument
+      updateDocument((current) => ({ ...current, cells: nextDocument.cells }), { captureVisibleEditorState: false, changedCellId: targetCellId, changeKind: 'insert' })
       lastSpeechInsertionRef.current = { cellId: targetCellId, start: 0, end: latex.length }
       setSpeechCorrectionHighlight(highlightRange ? { cellId: targetCellId, ...highlightRange } : null)
       focusCellEditorById(targetCellId)
@@ -1227,21 +1351,22 @@ function App() {
       appendToCellLatex(
         targetCellId,
         action.insertMode === 'text' ? speechPlainTextToLatex(action.text) : action.text,
-        document,
+        sourceDocument,
         true,
       )
     }
   }, [activateCellForExternalInput, appendToCellLatex, document, documentWithVisibleEditorState, fallbackCellId, focusCellEditorById, handleSpeechCommand, updateDocument])
 
   const getCurrentSpeechRowLatex = useCallback(() => {
-    if (!document) return ''
+    const sourceDocument = speechDocumentRef.current ?? document
+    if (!sourceDocument) return ''
 
-    const targetCellId = fallbackCellId(document)
+    const targetCellId = fallbackCellId(sourceDocument)
     if (targetCellId && targetCellId === activeCellId) {
-      return activeCellHandleRef.current?.getLatex() ?? document.cells.find((cell) => cell.id === targetCellId)?.latex ?? ''
+      return activeCellHandleRef.current?.getLatex() ?? sourceDocument.cells.find((cell) => cell.id === targetCellId)?.latex ?? ''
     }
 
-    return targetCellId ? document.cells.find((cell) => cell.id === targetCellId)?.latex ?? '' : ''
+    return targetCellId ? sourceDocument.cells.find((cell) => cell.id === targetCellId)?.latex ?? '' : ''
   }, [activeCellId, document, fallbackCellId])
 
   const handlePrepareSpeechInput = useCallback(() => {

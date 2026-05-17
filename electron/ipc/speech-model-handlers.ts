@@ -108,7 +108,9 @@ const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 3 * 60 * 1000
 
 let downloadPromise: Promise<SpeechModelAssetResult> | null = null
 let loadPromise: Promise<SpeechModelStatusPayload> | null = null
-let workerPromise: Promise<PythonSpeechWorker> | null = null
+let modelWorkerPromise: Promise<PythonSpeechWorker> | null = null
+let commandWorkerPromise: Promise<PythonSpeechWorker> | null = null
+let loadedModelWorker: PythonSpeechWorker | null = null
 let status: SpeechModelStatusPayload = {
   state: 'idle',
   modelId: SPEECH_MODEL_OPTIONS['2b'].modelId,
@@ -162,7 +164,8 @@ function speechTranscribeTimeoutMs() {
 
 function resetSpeechWorkerAfterFailure(error: Error) {
   loadPromise = null
-  workerPromise = null
+  modelWorkerPromise = null
+  loadedModelWorker = null
   setStatus({
     state: 'error',
     modelId: status.modelId,
@@ -417,6 +420,8 @@ async function resolvePythonCommand(mode: PythonDependencyMode = 'any') {
 class PythonSpeechWorker {
   private readonly child: ChildProcessWithoutNullStreams
   readonly dependencyMode: PythonDependencyMode
+  private readonly onFailure?: (error: Error) => void
+  private readonly onClosed?: (worker: PythonSpeechWorker) => void
   private nextId = 1
   private stdoutBuffer = ''
   private stderrBuffer = ''
@@ -428,8 +433,15 @@ class PythonSpeechWorker {
     timeout?: ReturnType<typeof setTimeout>
   }>()
 
-  constructor(python: PythonCommand, dependencyMode: PythonDependencyMode) {
+  constructor(
+    python: PythonCommand,
+    dependencyMode: PythonDependencyMode,
+    onFailure?: (error: Error) => void,
+    onClosed?: (worker: PythonSpeechWorker) => void,
+  ) {
     this.dependencyMode = dependencyMode
+    this.onFailure = onFailure
+    this.onClosed = onClosed
     this.child = spawn(python.command, [...python.args, workerScriptPath()], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -538,41 +550,76 @@ class PythonSpeechWorker {
       pending.reject(error)
     }
     this.pending.clear()
-    workerPromise = null
   }
 
   private handleFailure(error: Error) {
     this.rejectAll(error)
+    this.onClosed?.(this)
     if (!this.closedIntentionally) {
-      resetSpeechWorkerAfterFailure(error)
+      this.onFailure?.(error)
     }
   }
 }
 
 async function getWorker(requiredMode: PythonDependencyMode = 'any') {
-  const existingWorker = workerPromise ? await workerPromise.catch(() => null) : null
-  if (workerPromise && !existingWorker) {
-    workerPromise = null
+  if (requiredMode === 'stdlib') {
+    const existingCommandWorker = commandWorkerPromise ? await commandWorkerPromise.catch(() => null) : null
+    if (commandWorkerPromise && !existingCommandWorker) {
+      commandWorkerPromise = null
+    }
+    if (!commandWorkerPromise) {
+      const promise = (async () => {
+        const python = await resolvePythonCommand('stdlib')
+        return new PythonSpeechWorker(python, 'stdlib', undefined, (worker) => {
+          void promise.then((currentWorker) => {
+            if (currentWorker === worker) {
+              commandWorkerPromise = null
+            }
+          }).catch(() => undefined)
+        })
+      })()
+      commandWorkerPromise = promise
+    }
+
+    return commandWorkerPromise
   }
-  if (existingWorker && requiredMode !== 'any' && requiredMode !== 'stdlib' && existingWorker.dependencyMode !== requiredMode) {
+
+  const existingWorker = modelWorkerPromise ? await modelWorkerPromise.catch(() => null) : null
+  if (modelWorkerPromise && !existingWorker) {
+    modelWorkerPromise = null
+  }
+  if (existingWorker && requiredMode !== 'any' && existingWorker.dependencyMode !== requiredMode) {
     existingWorker.close()
-    workerPromise = null
+    if (loadedModelWorker === existingWorker) {
+      loadedModelWorker = null
+    }
+    modelWorkerPromise = null
   }
 
-  if (!workerPromise) {
-    workerPromise = (async () => {
+  if (!modelWorkerPromise) {
+    const promise = (async () => {
       const python = await resolvePythonCommand(requiredMode)
-      return new PythonSpeechWorker(python, requiredMode)
+      return new PythonSpeechWorker(python, requiredMode, resetSpeechWorkerAfterFailure, (worker) => {
+        void promise.then((currentWorker) => {
+          if (currentWorker === worker) {
+            modelWorkerPromise = null
+          }
+        }).catch(() => undefined)
+        if (loadedModelWorker === worker) {
+          loadedModelWorker = null
+        }
+      })
     })()
+    modelWorkerPromise = promise
   }
 
-  return workerPromise
+  return modelWorkerPromise
 }
 
 async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelStatusPayload> {
   const settings = readAppSettings(store)
   const model = SPEECH_MODEL_OPTIONS[settings.speechModelSize]
-  if (status.state === 'ready') {
+  if (status.state === 'ready' && loadedModelWorker) {
     return status
   }
 
@@ -638,6 +685,7 @@ async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelSta
         })
       })
 
+      loadedModelWorker = worker
       setStatus({
         state: 'ready',
         modelId: model.modelId,
@@ -647,6 +695,7 @@ async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelSta
       })
       return status
     } catch (error) {
+      loadedModelWorker = null
       setStatus({
         state: 'error',
         modelId: model.modelId,
@@ -711,12 +760,12 @@ function wavBufferFromSamples(samples: Float32Array, sampleRate: number) {
 
 async function transcribeSpeechChunk(store: ElectronStoreLike, payload: SpeechAudioChunkPayload): Promise<SpeechTranscriptResult> {
   const requestStarted = performance.now()
-  const currentStatus = status.state === 'ready' ? status : await loadSpeechModel(store)
-  if (currentStatus.state !== 'ready') {
+  const currentStatus = status.state === 'ready' && loadedModelWorker ? status : await loadSpeechModel(store)
+  if (currentStatus.state !== 'ready' || !loadedModelWorker) {
     throw new Error(currentStatus.error ?? 'Python Gemma speech model is not ready.')
   }
 
-  const worker = await getWorker()
+  const worker = loadedModelWorker
   const sourceSamples = new Float32Array(payload.audioSamples)
   const samples = resampleAudio(sourceSamples, payload.audioSampleRateHz)
   const audioPath = path.join(os.tmpdir(), `eqoustics-speech-${randomUUID()}.wav`)
