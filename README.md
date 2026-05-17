@@ -43,8 +43,8 @@ A Notion-style WYSIWYG math notebook editor with speech-to-LaTeX dictation. Writ
 
 For a fast first run, use the bundled sample notebook and manual:
 
-- **Demo notebook:** `demo/Demo Notebook.tex`
-- **User manual:** `manual/Eqoustics Manual.pdf`
+- **Demo notebook:** [demo/Demo Notebook.tex](demo/Demo%20Notebook.tex)
+- **User manual:** [manual/Eqoustics Manual.pdf](manual/Eqoustics%20Manual.pdf)
 
 After launching Eqoustics, open the demo notebook to see a ready-made document with example math content. Use the manual alongside it for a walkthrough of the editor, toolbar, file workflow, and speech controls.
 
