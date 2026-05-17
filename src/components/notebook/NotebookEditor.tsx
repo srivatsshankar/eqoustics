@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCode, faEye, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons'
 
-import { CellEditor, type CellChangeMetadata, type CellInsertHandle, type EditorSelectionState } from '../cell/CellEditor'
+import { CellEditor, type CellChangeMetadata, type CellInsertHandle, type CorrectionHighlightRange, type EditorSelectionState } from '../cell/CellEditor'
 import type { NotebookCell, NotebookDocument } from '../../shared/types/notebook'
 
 interface NotebookEditorProps {
@@ -23,6 +23,7 @@ interface NotebookEditorProps {
   selectedCellIds: Set<string>
   onSelectCellRows: (cellId: string, mode: 'replace' | 'toggle' | 'range') => void
   onExtendCellRowSelection: (cellId: string) => void
+  correctionHighlight: { cellId: string } & CorrectionHighlightRange | null
 }
 
 type RowListKind = 'bulletList' | 'numberedList' | null
@@ -55,6 +56,7 @@ export function NotebookEditor({
   selectedCellIds,
   onSelectCellRows,
   onExtendCellRowSelection,
+  correctionHighlight,
 }: NotebookEditorProps) {
   const draggedCellId = useRef<string | null>(null)
   const dragImageRef = useRef<HTMLElement | null>(null)
@@ -376,6 +378,7 @@ export function NotebookEditor({
               cell={cell}
               isActive={activeCellId === cell.id}
               viewMode={latexViewCellIds.has(cell.id) ? 'latex' : 'wysiwyg'}
+              correctionHighlight={correctionHighlight?.cellId === cell.id ? correctionHighlight : null}
               onActivate={() => onActivateCell(cell.id)}
               onChange={(next, metadata) => onCellChange(cell.id, next, metadata)}
               onInsertHandle={(handle) => {

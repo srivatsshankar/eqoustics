@@ -43,10 +43,17 @@ export interface CellChangeMetadata {
   data?: string | null
 }
 
+export interface CorrectionHighlightRange {
+  start: number
+  end: number
+  revision: number
+}
+
 interface CellEditorProps {
   cell: NotebookCell
   isActive: boolean
   viewMode: 'wysiwyg' | 'latex'
+  correctionHighlight?: CorrectionHighlightRange | null
   onActivate: () => void
   onChange: (cell: NotebookCell, metadata?: CellChangeMetadata) => void
   onInsertHandle: (handle: CellInsertHandle) => void
@@ -2101,6 +2108,81 @@ function serializeEditor(editor: HTMLElement): string {
   return serializeChildren(editor).replace(/\s+/g, ' ').trim()
 }
 
+const SPEECH_CORRECTION_HIGHLIGHT_CLASS = 'speech-correction-highlight'
+
+function rangesOverlap(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
+  return leftStart < rightEnd && rightStart < leftEnd
+}
+
+function clearSpeechCorrectionHighlights(root: HTMLElement) {
+  const wrappedTextNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-speech-correction-text="true"]'))
+  for (const wrapper of wrappedTextNodes) {
+    const parent = wrapper.parentNode
+    if (!parent) continue
+    while (wrapper.firstChild) {
+      parent.insertBefore(wrapper.firstChild, wrapper)
+    }
+    parent.removeChild(wrapper)
+    parent.normalize()
+  }
+
+  root.querySelectorAll<HTMLElement>(`.${SPEECH_CORRECTION_HIGHLIGHT_CLASS}`).forEach((element) => {
+    element.classList.remove(SPEECH_CORRECTION_HIGHLIGHT_CLASS)
+  })
+}
+
+function highlightTextNode(node: Text, nodeStart: number, range: CorrectionHighlightRange) {
+  const text = node.textContent ?? ''
+  if (!text) return
+
+  const serialized = serializeNode(node)
+  if (serialized.length !== text.length) {
+    const wrapper = document.createElement('span')
+    wrapper.className = SPEECH_CORRECTION_HIGHLIGHT_CLASS
+    wrapper.dataset.speechCorrectionText = 'true'
+    wrapper.textContent = text
+    node.replaceWith(wrapper)
+    return
+  }
+
+  const start = Math.max(0, range.start - nodeStart)
+  const end = Math.min(text.length, range.end - nodeStart)
+  if (start >= end) return
+
+  const fragment = document.createDocumentFragment()
+  if (start > 0) fragment.append(document.createTextNode(text.slice(0, start)))
+
+  const wrapper = document.createElement('span')
+  wrapper.className = SPEECH_CORRECTION_HIGHLIGHT_CLASS
+  wrapper.dataset.speechCorrectionText = 'true'
+  wrapper.textContent = text.slice(start, end)
+  fragment.append(wrapper)
+
+  if (end < text.length) fragment.append(document.createTextNode(text.slice(end)))
+  node.replaceWith(fragment)
+}
+
+function applySpeechCorrectionHighlights(root: HTMLElement, range?: CorrectionHighlightRange | null) {
+  clearSpeechCorrectionHighlights(root)
+  if (!range || range.start < 0 || range.end <= range.start) return
+
+  let offset = 0
+  for (const child of Array.from(root.childNodes)) {
+    const length = serializeNode(child).length
+    const nodeStart = offset
+    const nodeEnd = offset + length
+    offset = nodeEnd
+
+    if (!length || !rangesOverlap(nodeStart, nodeEnd, range.start, range.end)) continue
+
+    if (child.nodeType === Node.TEXT_NODE) {
+      highlightTextNode(child as Text, nodeStart, range)
+    } else if (child instanceof HTMLElement) {
+      child.classList.add(SPEECH_CORRECTION_HIGHLIGHT_CLASS)
+    }
+  }
+}
+
 function fillFirstLatexSlot(snippet: string, content: string): string {
   if (!content) return snippet
   if (snippet.includes('#?')) return snippet.replace('#?', content).replace(/#\?/g, ' ')
@@ -3372,6 +3454,7 @@ export function CellEditor({
   cell,
   isActive,
   viewMode,
+  correctionHighlight,
   onActivate,
   onChange,
   onInsertHandle,
@@ -3712,8 +3795,9 @@ export function CellEditor({
 
     editor.innerHTML = renderLatexToHtml(nextLatex)
     setNumberedListValue(editor, numberedListValue)
+    applySpeechCorrectionHighlights(editor, correctionHighlight)
     lastSyncedLatexRef.current = nextLatex
-  }, [cell.latex, numberedListValue, viewMode])
+  }, [cell.latex, correctionHighlight, numberedListValue, viewMode])
 
   useEffect(() => {
     const editor = visualEditorRef.current
@@ -3721,14 +3805,21 @@ export function CellEditor({
 
     editor.innerHTML = renderLatexToHtml(cellRef.current.latex || '')
     setNumberedListValue(editor, numberedListValue)
+    applySpeechCorrectionHighlights(editor, correctionHighlight)
     lastSyncedLatexRef.current = cellRef.current.latex || ''
-  }, [numberedListValue, viewMode])
+  }, [correctionHighlight, numberedListValue, viewMode])
 
   useEffect(() => {
     const editor = visualEditorRef.current
     if (!editor || viewMode !== 'wysiwyg') return
     setNumberedListValue(editor, numberedListValue)
   }, [numberedListValue, viewMode])
+
+  useEffect(() => {
+    const editor = visualEditorRef.current
+    if (!editor || viewMode !== 'wysiwyg') return
+    applySpeechCorrectionHighlights(editor, correctionHighlight)
+  }, [cell.latex, correctionHighlight, viewMode])
 
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Tab') {
@@ -3767,6 +3858,7 @@ export function CellEditor({
       } else if (caretIsAtProtectedSlotDeleteBoundary(event.currentTarget, event.key === 'Backspace')) {
         event.preventDefault()
       } else if (event.key === 'Backspace' && !serializeEditor(event.currentTarget).trim()) {
+        event.preventDefault()
         onDeleteCellRef.current()
       }
     } else if (isTextInputKey(event)) {

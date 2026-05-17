@@ -1,12 +1,62 @@
 import { defineConfig } from 'vite'
+import fs from 'node:fs'
 import path from 'node:path'
 import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
+
+function vadAssetContentType(fileName: string) {
+  if (fileName.endsWith('.wasm')) return 'application/wasm'
+  if (fileName.endsWith('.mjs') || fileName.endsWith('.js')) return 'text/javascript'
+  if (fileName.endsWith('.onnx')) return 'application/octet-stream'
+  return 'application/octet-stream'
+}
+
+function vadAssetsPlugin() {
+  const vadDist = path.join(__dirname, 'node_modules', '@ricky0123', 'vad-web', 'dist')
+  const ortDist = path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist')
+  const assetFiles = [
+    { source: path.join(vadDist, 'vad.worklet.bundle.min.js'), fileName: 'vad/vad.worklet.bundle.min.js' },
+    { source: path.join(vadDist, 'silero_vad_v5.onnx'), fileName: 'vad/silero_vad_v5.onnx' },
+    { source: path.join(vadDist, 'silero_vad_legacy.onnx'), fileName: 'vad/silero_vad_legacy.onnx' },
+    ...fs.readdirSync(ortDist)
+      .filter((fileName) => /^ort-wasm.*\.(?:wasm|mjs)$/.test(fileName))
+      .map((fileName) => ({ source: path.join(ortDist, fileName), fileName: `vad/${fileName}` })),
+  ]
+
+  return {
+    name: 'eqoustics-vad-assets',
+    configureServer(server) {
+      server.middlewares.use('/vad/', (request, response, next) => {
+        const requestPath = decodeURIComponent((request.url ?? '').replace(/[?#].*$/, '').replace(/^\//, ''))
+        const asset = assetFiles.find((candidate) => path.basename(candidate.fileName) === requestPath)
+        if (!asset) {
+          next()
+          return
+        }
+
+        response.setHeader('content-type', vadAssetContentType(requestPath))
+        fs.createReadStream(asset.source)
+          .on('error', next)
+          .pipe(response)
+      })
+    },
+    generateBundle() {
+      for (const asset of assetFiles) {
+        this.emitFile({
+          type: 'asset',
+          fileName: asset.fileName,
+          source: fs.readFileSync(asset.source),
+        })
+      }
+    },
+  }
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    vadAssetsPlugin(),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.

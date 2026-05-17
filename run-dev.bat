@@ -18,6 +18,7 @@ if not exist node_modules (
 )
 
 echo [Eqoustics] Starting development mode with hot reloading...
+set ELECTRON_RUN_AS_NODE=
 call npm run dev
 
 endlocal

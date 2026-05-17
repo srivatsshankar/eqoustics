@@ -12,6 +12,9 @@ export const IPC_CHANNELS = {
   speechModelGetStatus: 'speech:model:getStatus',
   speechModelLoad: 'speech:model:load',
   speechModelStatusChanged: 'speech:model:statusChanged',
+  speechListCommands: 'speech:commands:list',
+  speechAddCommandAlias: 'speech:commands:addAlias',
+  speechDeleteCommandAlias: 'speech:commands:deleteAlias',
   speechTranscribeChunk: 'speech:transcribeChunk',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
@@ -28,13 +31,18 @@ export type WindowControlAction = 'minimize' | 'toggleMaximize' | 'close'
 export type WindowStatePayload = { isMaximized: boolean }
 export type AppearancePreference = 'system' | 'light' | 'dark'
 export type SpeechModelSize = '2b' | '4b'
+export type SpeechAccelerationBackend = 'gpu' | 'cpu'
+export type SpeechInferenceRuntime = 'litert' | 'transformers'
 export interface AppSettingsPayload {
   microphoneDeviceId: string | null
   appearance: AppearancePreference
   speechModelSize: SpeechModelSize
+  speechAcceleration: SpeechAccelerationBackend
+  speechInferenceRuntime: SpeechInferenceRuntime
+  transformersMtp: boolean
   totalMemoryBytes: number
 }
-export type AppSettingsUpdatePayload = Partial<Pick<AppSettingsPayload, 'microphoneDeviceId' | 'appearance' | 'speechModelSize'>>
+export type AppSettingsUpdatePayload = Partial<Pick<AppSettingsPayload, 'microphoneDeviceId' | 'appearance' | 'speechModelSize' | 'speechAcceleration' | 'speechInferenceRuntime' | 'transformersMtp'>>
 export type SpeechModelState = 'idle' | 'loading' | 'ready' | 'error'
 export type SpeechModelLoadStage = 'python' | 'downloading' | 'initializing'
 
@@ -54,6 +62,75 @@ export interface SpeechAudioChunkPayload {
   currentRowLatex?: string
 }
 
+export type SpeechRecognitionCommand =
+  | 'new-line'
+  | 'new-paragraph'
+  | 'go-to-row'
+  | 'bold-that'
+  | 'italic-that'
+  | 'underline-that'
+  | 'bold-row'
+  | 'italic-row'
+  | 'underline-row'
+  | 'heading-1'
+  | 'heading-2'
+  | 'heading-3'
+  | 'heading-4'
+  | 'delete-that'
+  | 'delete-row'
+  | 'bullet-that'
+  | 'number-that'
+  | 'save-document'
+  | 'save-document-as'
+  | 'open-document'
+  | 'undo-that'
+  | 'redo-that'
+  | 'type-text'
+  | 'help-me'
+  | 'close-help'
+  | 'minimize-window'
+  | 'maximize-window'
+  | 'close-window'
+  | 'silence'
+  | 'listen'
+  | 'deactivate-microphone'
+export type SpeechCommandCategory = 'navigation' | 'formatting' | 'microphone'
+
+export interface SpeechCommandInfo {
+  command: SpeechRecognitionCommand
+  name: string
+  category: SpeechCommandCategory
+  description: string
+  aliases: string[]
+  userAliases: string[]
+  canCreateAliases: boolean
+}
+
+export interface SpeechCommandAliasPayload {
+  command: SpeechRecognitionCommand
+  alias: string
+}
+
+export type SpeechRecognitionAction =
+  | {
+    type: 'command'
+    command: SpeechRecognitionCommand
+    rowNumber?: number
+  }
+  | {
+    type: 'insert'
+    text: string
+    insertMode: 'latex' | 'text'
+  }
+  | {
+    type: 'replace-row'
+    latex: string
+  }
+  | {
+    type: 'ignore'
+  }
+
 export interface SpeechTranscriptResult {
   transcript: string
+  action: SpeechRecognitionAction
 }

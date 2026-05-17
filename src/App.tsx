@@ -11,14 +11,15 @@ import { NotebookEditor } from './components/notebook/NotebookEditor'
 import { CustomScrollbar } from './components/scrollbar/CustomScrollbar'
 import { FloatingSpeechControl } from './components/speech/FloatingSpeechControl'
 import { EditorToolbar } from './components/toolbar/EditorToolbar'
-import type { CellChangeKind, CellChangeMetadata, CellInsertHandle, EditorSelectionState, TextFormatCommand } from './components/cell/CellEditor'
+import type { CellChangeKind, CellChangeMetadata, CellInsertHandle, CorrectionHighlightRange, EditorSelectionState, TextFormatCommand } from './components/cell/CellEditor'
+import type { SpeechRecognitionResult } from './speech/pythonSpeech'
 
 import './App.css'
 import { copyCells, type CopyAsFormat } from './clipboard/editorClipboard'
 import { renderPrintableNotebook } from './print/renderPrintableNotebook'
 import { parseNotebookFromLatex } from './serialization/latexParser'
 import { serializeNotebookToLatex } from './serialization/latexSerializer'
-import type { AppSettingsPayload, AppSettingsUpdatePayload, FileMenuAction } from './shared/ipc/channels'
+import type { AppSettingsPayload, AppSettingsUpdatePayload, FileMenuAction, SpeechRecognitionCommand } from './shared/ipc/channels'
 import {
   createNotebookCell,
   type NotebookCell,
@@ -59,6 +60,9 @@ const FALLBACK_APP_SETTINGS: AppSettingsPayload = {
   microphoneDeviceId: null,
   appearance: 'system',
   speechModelSize: '2b',
+  speechAcceleration: 'gpu',
+  speechInferenceRuntime: 'litert',
+  transformersMtp: true,
   totalMemoryBytes: 0,
 }
 
@@ -90,12 +94,39 @@ interface TableOfContentsHeading {
   title: string
 }
 
+type SpeechCorrectionHighlight = ({ cellId: string } & CorrectionHighlightRange) | null
+type HelpMenuRequest = { id: number; action: 'toggle' | 'close' }
+
+interface LastSpeechInsertion {
+  cellId: string
+  start: number
+  end: number
+}
+
 const HEADING_COMMANDS: Array<{ command: string; level: TableOfContentsHeading['level'] }> = [
   { command: '\\section', level: 1 },
   { command: '\\subsection', level: 2 },
   { command: '\\subsubsection', level: 3 },
   { command: '\\paragraph', level: 4 },
 ]
+
+const INLINE_SPEECH_FORMATS = {
+  bold: ['\\textbf{', '}'],
+  italic: ['\\textit{', '}'],
+  underline: ['\\underline{', '}'],
+} as const
+
+const LIST_SPEECH_FORMATS = {
+  bulletList: ['\\begin{itemize}\\item ', '\\end{itemize}'],
+  numberedList: ['\\begin{enumerate}\\item ', '\\end{enumerate}'],
+} as const
+
+const HEADING_COMMAND_BY_LEVEL: Record<1 | 2 | 3 | 4, string> = {
+  1: '\\section',
+  2: '\\subsection',
+  3: '\\subsubsection',
+  4: '\\paragraph',
+}
 
 function readLatexGroup(source: string, startIndex: number): string | null {
   const openIndex = source.indexOf('{', startIndex)
@@ -152,6 +183,57 @@ function headingFromCell(cell: NotebookCell): TableOfContentsHeading | null {
   return null
 }
 
+function lastLatexTokenRange(latex: string): { start: number; end: number } | null {
+  const end = latex.search(/\s*$/)
+  const body = latex.slice(0, end)
+  if (!body) return null
+
+  const match = /(?:\\[a-zA-Z]+|[A-Za-z0-9]+|[^\s])$/.exec(body)
+  if (!match) return null
+
+  return {
+    start: match.index,
+    end,
+  }
+}
+
+function wrapLatexRange(latex: string, range: { start: number; end: number }, format: keyof typeof INLINE_SPEECH_FORMATS): string {
+  const [open, close] = INLINE_SPEECH_FORMATS[format]
+  return `${latex.slice(0, range.start)}${open}${latex.slice(range.start, range.end)}${close}${latex.slice(range.end)}`
+}
+
+function stripHeadingWrapper(latex: string): string {
+  const trimmed = latex.trim()
+  for (const { command } of HEADING_COMMANDS) {
+    if (!trimmed.startsWith(command)) continue
+
+    const afterCommand = trimmed.slice(command.length)
+    if (afterCommand && !/^\s*(?:\{|$)/.test(afterCommand)) continue
+
+    return readLatexGroup(trimmed, command.length) ?? afterCommand.trim()
+  }
+
+  return latex
+}
+
+function formatWholeRowLatex(latex: string, format: TextFormatCommand): string {
+  if (format === 'heading1' || format === 'heading2' || format === 'heading3' || format === 'heading4') {
+    const level = Number(format.slice(-1)) as 1 | 2 | 3 | 4
+    return `${HEADING_COMMAND_BY_LEVEL[level]}{${stripHeadingWrapper(latex)}}`
+  }
+
+  if (format === 'bulletList' || format === 'numberedList') {
+    const [open, close] = LIST_SPEECH_FORMATS[format]
+    return `${open}${latex || ' '}${close}`
+  }
+
+  const inlineFormat = format === 'bold' || format === 'italic' || format === 'underline' ? format : null
+  if (!inlineFormat) return latex
+
+  const [open, close] = INLINE_SPEECH_FORMATS[inlineFormat]
+  return `${open}${latex}${close}`
+}
+
 function readStoredTableOfContentsOpen(): boolean {
   if (typeof window === 'undefined') return false
 
@@ -174,6 +256,55 @@ function documentsMatch(left: NotebookDocument, right: NotebookDocument): boolea
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function speechPlainTextToLatex(text: string): string {
+  return Array.from(text).map((char) => {
+    if (char === '\\') return '\\textbackslash{}'
+    if (char === '{' || char === '}') return `\\${char}`
+    return char
+  }).join('')
+}
+
+function changedLatexRange(previousLatex: string, nextLatex: string): CorrectionHighlightRange | null {
+  if (previousLatex === nextLatex) return null
+
+  let prefixLength = 0
+  const maxPrefixLength = Math.min(previousLatex.length, nextLatex.length)
+  while (prefixLength < maxPrefixLength && previousLatex[prefixLength] === nextLatex[prefixLength]) {
+    prefixLength += 1
+  }
+
+  let suffixLength = 0
+  while (
+    suffixLength < previousLatex.length - prefixLength
+    && suffixLength < nextLatex.length - prefixLength
+    && previousLatex[previousLatex.length - 1 - suffixLength] === nextLatex[nextLatex.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1
+  }
+
+  let start = prefixLength
+  let end = nextLatex.length - suffixLength
+  if (end <= start) {
+    if (nextLatex.length === 0) return null
+    start = Math.max(0, Math.min(start, nextLatex.length - 1))
+    end = Math.min(nextLatex.length, start + 1)
+  }
+
+  return {
+    start,
+    end,
+    revision: Date.now(),
+  }
+}
+
+function confirmDeleteRows(rowCount: number): boolean {
+  if (rowCount <= 0) return false
+
+  return window.confirm(rowCount === 1
+    ? 'Delete this row?'
+    : `Delete ${rowCount} selected rows?`)
+}
+
 function App() {
   const [document, setDocument] = useState<NotebookDocument | null>(null)
   const [filePath, setFilePath] = useState<string | null>(null)
@@ -192,13 +323,22 @@ function App() {
   const typingHistoryGroupRef = useRef<TypingHistoryGroup | null>(null)
   const documentShellRef = useRef<HTMLElement | null>(null)
   const initialSpeechModelSizeRef = useRef<AppSettingsPayload['speechModelSize']>(FALLBACK_APP_SETTINGS.speechModelSize)
+  const initialSpeechAccelerationRef = useRef<AppSettingsPayload['speechAcceleration']>(FALLBACK_APP_SETTINGS.speechAcceleration)
+  const initialSpeechInferenceRuntimeRef = useRef<AppSettingsPayload['speechInferenceRuntime']>(FALLBACK_APP_SETTINGS.speechInferenceRuntime)
+  const initialTransformersMtpRef = useRef(FALLBACK_APP_SETTINGS.transformersMtp)
   const [isDirty, setIsDirty] = useState(false)
   const [isTableOfContentsOpen, setIsTableOfContentsOpen] = useState(readStoredTableOfContentsOpen)
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false)
   const [linkPrompt, setLinkPrompt] = useState<{ selection: EditorSelectionState | null; url: string } | null>(null)
   const [selectedCellIds, setSelectedCellIds] = useState<Set<string>>(() => new Set())
   const [copyDefaultFormat, setCopyDefaultFormat] = useState<CopyAsFormat>('png')
+  const [speechCorrectionHighlight, setSpeechCorrectionHighlight] = useState<SpeechCorrectionHighlight>(null)
+  const [isGemmaProcessing, setIsGemmaProcessing] = useState(false)
+  const [helpMenuRequest, setHelpMenuRequest] = useState<HelpMenuRequest | null>(null)
   const rowSelectionAnchorRef = useRef<string | null>(null)
+  const lastActiveCellIdRef = useRef<string | null>(null)
+  const lastSpeechInsertionRef = useRef<LastSpeechInsertion | null>(null)
+  const allowWindowCloseRef = useRef(false)
 
   useEffect(() => {
     void (async () => {
@@ -210,14 +350,24 @@ function App() {
       setRecentFiles(recent)
       setAppSettings(settings)
       initialSpeechModelSizeRef.current = settings.speechModelSize
+      initialSpeechAccelerationRef.current = settings.speechAcceleration
+      initialSpeechInferenceRuntimeRef.current = settings.speechInferenceRuntime
+      initialTransformersMtpRef.current = settings.transformersMtp
       setDocument(nextDocument)
       setFilePath(null)
       setDocumentRevision((current) => current + 1)
       setActiveCellId(nextDocument.cells[0]?.id ?? null)
+      lastActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
       setIsDirty(false)
       setIsBootstrapped(true)
     })()
   }, [])
+
+  useEffect(() => {
+    if (activeCellId !== null) {
+      lastActiveCellIdRef.current = activeCellId
+    }
+  }, [activeCellId])
 
   const refreshMicrophones = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return
@@ -303,8 +453,13 @@ function App() {
   const updateAppSettings = useCallback(async (update: AppSettingsUpdatePayload) => {
     const nextSettings = await window.eqoustics.updateSettings(update)
     setAppSettings(nextSettings)
-    if (update.speechModelSize) {
-      setIsModelRestartRequired(nextSettings.speechModelSize !== initialSpeechModelSizeRef.current)
+    if (update.speechModelSize || update.speechAcceleration || update.speechInferenceRuntime || update.transformersMtp !== undefined) {
+      setIsModelRestartRequired(
+        nextSettings.speechModelSize !== initialSpeechModelSizeRef.current
+        || nextSettings.speechAcceleration !== initialSpeechAccelerationRef.current
+        || nextSettings.speechInferenceRuntime !== initialSpeechInferenceRuntimeRef.current
+        || nextSettings.transformersMtp !== initialTransformersMtpRef.current,
+      )
     }
   }, [])
 
@@ -325,21 +480,53 @@ function App() {
     setFilePath(nextPath)
     setDocumentRevision((current) => current + 1)
     setActiveCellId(nextDocument.cells[0]?.id ?? null)
+    lastActiveCellIdRef.current = nextDocument.cells[0]?.id ?? null
     setUndoStack([])
     setRedoStack([])
     setPendingSelectionRestore(null)
     setSelectedCellIds(new Set())
+    setSpeechCorrectionHighlight(null)
     rowSelectionAnchorRef.current = null
     typingHistoryGroupRef.current = null
+    lastSpeechInsertionRef.current = null
     setIsDirty(false)
   }
 
+  const hasUnsavedDocumentRequiringConfirmation = useCallback(() => {
+    if (!document || !isDirty) return false
+
+    const currentDocument = documentWithVisibleEditorState(document)
+    return Boolean(filePath) || !isDocumentBlank(currentDocument)
+  }, [document, documentWithVisibleEditorState, filePath, isDirty])
+
+  const confirmCloseCurrentDocument = useCallback(() => {
+    if (!hasUnsavedDocumentRequiringConfirmation()) return true
+
+    return window.confirm('Close without saving?\n\nUnsaved changes will be discarded.')
+  }, [hasUnsavedDocumentRequiringConfirmation])
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowWindowCloseRef.current || !hasUnsavedDocumentRequiringConfirmation()) return
+
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [hasUnsavedDocumentRequiringConfirmation])
+
   const handleNewNotebook = async () => {
+    if (!confirmCloseCurrentDocument()) return
+
     const nextDocument = await window.eqoustics.createNotebook()
     replaceDocument(nextDocument, null)
   }
 
   const handleOpenNotebook = async () => {
+    if (!confirmCloseCurrentDocument()) return
+
     const opened = await window.eqoustics.openNotebook()
 
     if (!opened) {
@@ -352,11 +539,20 @@ function App() {
   }
 
   const handleOpenRecentFile = async (recentFilePath: string) => {
+    if (!confirmCloseCurrentDocument()) return
+
     const opened = await window.eqoustics.openNotebookAtPath(recentFilePath)
     const parsed = parseNotebookFromLatex(opened.content, titleFromPath(opened.path))
     replaceDocument(parsed, opened.path)
     await refreshRecentFiles()
   }
+
+  const handleCloseWindow = useCallback(() => {
+    if (!confirmCloseCurrentDocument()) return
+
+    allowWindowCloseRef.current = true
+    void window.eqoustics.windowControl('close')
+  }, [confirmCloseCurrentDocument])
 
   const handleExportPdf = async () => {
     if (!document) {
@@ -517,6 +713,8 @@ function App() {
     setPendingSelectionRestore(entry.selection)
     activeCellHandleRef.current = null
     typingHistoryGroupRef.current = null
+    lastSpeechInsertionRef.current = null
+    setSpeechCorrectionHighlight(null)
     setIsDirty(true)
   }, [])
 
@@ -573,6 +771,8 @@ function App() {
   }, [handleRedo, handleUndo])
 
   const handleCellChange = (cellId: string, cell: NotebookCell, metadata?: CellChangeMetadata) => {
+    setSpeechCorrectionHighlight(null)
+    lastSpeechInsertionRef.current = null
     updateDocument((current) => ({
       ...current,
       cells: current.cells.map((c) => (c.id === cellId ? cell : c)),
@@ -620,8 +820,38 @@ function App() {
     }, { captureVisibleEditorState: true })
   }
 
+  const focusCellEditorById = useCallback((cellId: string) => {
+    window.requestAnimationFrame(() => {
+      const row = documentShellRef.current?.querySelector<HTMLElement>(`[data-cell-id="${cellId}"]`)
+      const editor = row?.querySelector<HTMLElement>('.visual-math-editor, .latex-source-editor')
+      if (!row || !editor) return
+
+      row.scrollIntoView({ block: 'nearest' })
+      editor.focus()
+
+      if (editor instanceof HTMLTextAreaElement) {
+        const end = editor.value.length
+        editor.setSelectionRange(end, end)
+        return
+      }
+
+      const selection = window.getSelection()
+      if (!selection) return
+
+      const range = window.document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+  }, [])
+
   const handleRemoveCell = (cellId: string) => {
     if (!document) {
+      return
+    }
+
+    if (!confirmDeleteRows(1)) {
       return
     }
 
@@ -648,6 +878,8 @@ function App() {
   const handleAddCell = (targetCellId: string, position: 'before' | 'after', initialLatex = '') => {
     const nextCell = createNotebookCell(initialLatex)
     setActiveCellId(nextCell.id)
+    lastActiveCellIdRef.current = nextCell.id
+    focusCellEditorById(nextCell.id)
 
     updateDocument((current) => {
       const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
@@ -675,6 +907,8 @@ function App() {
     if (nextCells.length === 0) return
 
     setActiveCellId(nextCells[nextCells.length - 1].id)
+    lastActiveCellIdRef.current = nextCells[nextCells.length - 1].id
+    focusCellEditorById(nextCells[nextCells.length - 1].id)
 
     updateDocument((current) => {
       const targetIndex = current.cells.findIndex((cell) => cell.id === targetCellId)
@@ -697,23 +931,323 @@ function App() {
     handleAddCell(targetCellId, 'before', initialLatex)
   }
 
+  const fallbackCellId = useCallback((sourceDocument: NotebookDocument) => {
+    if (activeCellId && sourceDocument.cells.some((cell) => cell.id === activeCellId)) {
+      return activeCellId
+    }
+    if (lastActiveCellIdRef.current && sourceDocument.cells.some((cell) => cell.id === lastActiveCellIdRef.current)) {
+      return lastActiveCellIdRef.current
+    }
+
+    return sourceDocument.cells[0]?.id ?? null
+  }, [activeCellId])
+
+  const activateCellForExternalInput = useCallback((cellId: string | null) => {
+    if (!cellId) return
+
+    lastActiveCellIdRef.current = cellId
+    setActiveCellId(cellId)
+    setSelectedCellIds(new Set())
+    rowSelectionAnchorRef.current = null
+    window.requestAnimationFrame(() => {
+      documentShellRef.current
+        ?.querySelector<HTMLElement>(`[data-cell-id="${cellId}"]`)
+        ?.scrollIntoView({ block: 'nearest' })
+    })
+  }, [])
+
+  const appendToCellLatex = useCallback((cellId: string, text: string, sourceDocument: NotebookDocument, trackSpeechInsertion = false) => {
+    const visibleDocument = documentWithVisibleEditorState(sourceDocument)
+    const currentCell = visibleDocument.cells.find((cell) => cell.id === cellId)
+    const currentLatex = currentCell?.latex ?? ''
+    const separator = currentLatex.length > 0 && text.length > 0 && !/\s$/.test(currentLatex) ? ' ' : ''
+    const nextLatex = `${currentLatex}${separator}${text}`
+    const insertedStart = currentLatex.length + separator.length
+
+    setSpeechCorrectionHighlight(null)
+    activateCellForExternalInput(cellId)
+    updateDocument((current) => ({
+      ...current,
+      cells: visibleDocument.cells.map((cell) => (
+        cell.id === cellId ? { ...cell, latex: nextLatex } : cell
+      )),
+    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'insert' })
+    lastSpeechInsertionRef.current = trackSpeechInsertion
+      ? { cellId, start: insertedStart, end: insertedStart + text.length }
+      : null
+    focusCellEditorById(cellId)
+  }, [activateCellForExternalInput, documentWithVisibleEditorState, focusCellEditorById, updateDocument])
+
   const handleInsertSnippet = (snippet: string, mode?: 'cmd' | 'write' | 'latex' | 'template' | 'func-slot') => {
+    const targetCellId = document ? fallbackCellId(document) : null
+    if (activeCellId === null && document) {
+      activateCellForExternalInput(targetCellId)
+    }
+
+    if (!activeCellHandleRef.current && targetCellId && document) {
+      appendToCellLatex(targetCellId, snippet, document)
+      return
+    }
+
     activeCellHandleRef.current?.insert(snippet, mode)
   }
 
-  const handleSpeechTranscript = useCallback((transcript: string) => {
-    activeCellHandleRef.current?.insert(transcript, 'write')
-  }, [])
+  const updateCurrentRowLatexFromSpeechCommand = useCallback((
+    cellId: string,
+    updater: (latex: string) => string,
+    changeKind: CellChangeKind = 'format',
+  ) => {
+    if (!document) return
+
+    const visibleDocument = documentWithVisibleEditorState(document)
+    const currentCell = visibleDocument.cells.find((cell) => cell.id === cellId)
+    if (!currentCell) return
+
+    const nextLatex = updater(currentCell.latex ?? '')
+    setSpeechCorrectionHighlight(null)
+    activateCellForExternalInput(cellId)
+    updateDocument((current) => ({
+      ...current,
+      cells: visibleDocument.cells.map((cell) => (
+        cell.id === cellId ? { ...cell, latex: nextLatex } : cell
+      )),
+    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind })
+    focusCellEditorById(cellId)
+  }, [activateCellForExternalInput, document, documentWithVisibleEditorState, focusCellEditorById, updateDocument])
+
+  const handleFormatThatCommand = useCallback((cellId: string, format: keyof typeof INLINE_SPEECH_FORMATS) => {
+    updateCurrentRowLatexFromSpeechCommand(cellId, (latex) => {
+      const speechRange = lastSpeechInsertionRef.current?.cellId === cellId ? lastSpeechInsertionRef.current : null
+      const range = speechRange && speechRange.end <= latex.length
+        ? { start: speechRange.start, end: speechRange.end }
+        : lastLatexTokenRange(latex)
+      if (!range || range.start === range.end) return latex
+
+      const nextLatex = wrapLatexRange(latex, range, format)
+      const [open, close] = INLINE_SPEECH_FORMATS[format]
+      lastSpeechInsertionRef.current = {
+        cellId,
+        start: range.start,
+        end: range.end + open.length + close.length,
+      }
+      return nextLatex
+    })
+  }, [updateCurrentRowLatexFromSpeechCommand])
+
+  const handleDeleteThatCommand = useCallback((cellId: string) => {
+    updateCurrentRowLatexFromSpeechCommand(cellId, (latex) => {
+      const speechRange = lastSpeechInsertionRef.current?.cellId === cellId ? lastSpeechInsertionRef.current : null
+      const range = speechRange && speechRange.end <= latex.length
+        ? { start: speechRange.start, end: speechRange.end }
+        : lastLatexTokenRange(latex)
+      lastSpeechInsertionRef.current = null
+      if (!range) return latex
+
+      const prefix = latex.slice(0, range.start).replace(/\s+$/, '')
+      const suffix = latex.slice(range.end).replace(/^\s+/, '')
+      if (!prefix) return suffix
+      if (!suffix) return prefix
+      return `${prefix} ${suffix}`
+    }, 'delete')
+  }, [updateCurrentRowLatexFromSpeechCommand])
+
+  const handleFormatRowCommand = useCallback((cellId: string, format: TextFormatCommand) => {
+    lastSpeechInsertionRef.current = null
+    updateCurrentRowLatexFromSpeechCommand(cellId, (latex) => formatWholeRowLatex(latex, format))
+  }, [updateCurrentRowLatexFromSpeechCommand])
+
+  const handleDeleteRowCommand = useCallback((cellId: string) => {
+    if (!document) return
+
+    const visibleDocument = documentWithVisibleEditorState(document)
+    const deletedIndex = visibleDocument.cells.findIndex((cell) => cell.id === cellId)
+    if (deletedIndex < 0) return
+
+    const remainingCells = visibleDocument.cells.filter((cell) => cell.id !== cellId)
+    const safeCells = remainingCells.length > 0 ? remainingCells : [createNotebookCell()]
+    const nextFocusIndex = Math.max(0, Math.min(deletedIndex, safeCells.length - 1))
+    const nextFocusCellId = safeCells[nextFocusIndex]?.id ?? null
+
+    lastSpeechInsertionRef.current = null
+    setSelectedCellIds(new Set())
+    rowSelectionAnchorRef.current = null
+    setActiveCellId(nextFocusCellId)
+    lastActiveCellIdRef.current = nextFocusCellId
+    updateDocument((current) => ({
+      ...current,
+      cells: safeCells,
+    }), { captureVisibleEditorState: false, changedCellId: cellId, changeKind: 'delete' })
+    if (nextFocusCellId) focusCellEditorById(nextFocusCellId)
+  }, [document, documentWithVisibleEditorState, focusCellEditorById, updateDocument])
+
+  const handleSpeechCommand = useCallback((command: SpeechRecognitionCommand, targetCellId: string, rowNumber?: number) => {
+    if (!document) return
+
+    switch (command) {
+      case 'new-line':
+        handleAddCellBelow(targetCellId)
+        return
+      case 'new-paragraph':
+        handleAddCellsBelow(targetCellId, ['', ''])
+        return
+      case 'go-to-row': {
+        const rowIndex = Math.max(0, (rowNumber ?? 1) - 1)
+        const nextCellId = document.cells[rowIndex]?.id ?? targetCellId
+        activateCellForExternalInput(nextCellId)
+        focusCellEditorById(nextCellId)
+        return
+      }
+      case 'bold-that':
+        handleFormatThatCommand(targetCellId, 'bold')
+        return
+      case 'italic-that':
+        handleFormatThatCommand(targetCellId, 'italic')
+        return
+      case 'underline-that':
+        handleFormatThatCommand(targetCellId, 'underline')
+        return
+      case 'bold-row':
+        handleFormatRowCommand(targetCellId, 'bold')
+        return
+      case 'italic-row':
+        handleFormatRowCommand(targetCellId, 'italic')
+        return
+      case 'underline-row':
+        handleFormatRowCommand(targetCellId, 'underline')
+        return
+      case 'heading-1':
+        handleFormatRowCommand(targetCellId, 'heading1')
+        return
+      case 'heading-2':
+        handleFormatRowCommand(targetCellId, 'heading2')
+        return
+      case 'heading-3':
+        handleFormatRowCommand(targetCellId, 'heading3')
+        return
+      case 'heading-4':
+        handleFormatRowCommand(targetCellId, 'heading4')
+        return
+      case 'delete-that':
+        handleDeleteThatCommand(targetCellId)
+        return
+      case 'delete-row':
+        handleDeleteRowCommand(targetCellId)
+        return
+      case 'bullet-that':
+        handleFormatRowCommand(targetCellId, 'bulletList')
+        return
+      case 'number-that':
+        handleFormatRowCommand(targetCellId, 'numberedList')
+        return
+      case 'save-document':
+        void persistDocument(false)
+        return
+      case 'save-document-as':
+        void persistDocument(true)
+        return
+      case 'open-document':
+        void handleOpenNotebook()
+        return
+      case 'undo-that':
+        handleUndo()
+        return
+      case 'redo-that':
+        handleRedo()
+        return
+      case 'help-me':
+        setHelpMenuRequest({ id: Date.now(), action: 'toggle' })
+        return
+      case 'close-help':
+        setHelpMenuRequest({ id: Date.now(), action: 'close' })
+        return
+      case 'minimize-window':
+        void window.eqoustics.windowControl('minimize')
+        return
+      case 'maximize-window':
+        void window.eqoustics.windowControl('toggleMaximize')
+        return
+      case 'close-window':
+        handleCloseWindow()
+        return
+      case 'type-text':
+      case 'silence':
+      case 'listen':
+      case 'deactivate-microphone':
+        return
+    }
+  }, [
+    activateCellForExternalInput,
+    document,
+    focusCellEditorById,
+    handleAddCellBelow,
+    handleAddCellsBelow,
+    handleCloseWindow,
+    handleDeleteRowCommand,
+    handleDeleteThatCommand,
+    handleFormatRowCommand,
+    handleFormatThatCommand,
+    handleOpenNotebook,
+    handleRedo,
+    handleUndo,
+    persistDocument,
+  ])
+
+  const handleSpeechResult = useCallback((result: SpeechRecognitionResult) => {
+    if (!document) return
+
+    const targetCellId = fallbackCellId(document)
+    if (!targetCellId) return
+    const { action } = result
+    setSpeechCorrectionHighlight(null)
+
+    if (action.type === 'command') {
+      handleSpeechCommand(action.command, targetCellId, action.rowNumber)
+      return
+    }
+
+    if (action.type === 'replace-row') {
+      const { latex } = action
+      const visibleDocument = documentWithVisibleEditorState(document)
+      const previousLatex = visibleDocument.cells.find((cell) => cell.id === targetCellId)?.latex ?? ''
+      const highlightRange = changedLatexRange(previousLatex, latex)
+      activateCellForExternalInput(targetCellId)
+      updateDocument((current) => ({
+        ...current,
+        cells: visibleDocument.cells.map((cell) => (
+          cell.id === targetCellId ? { ...cell, latex } : cell
+        )),
+      }), { captureVisibleEditorState: false, changedCellId: targetCellId, changeKind: 'insert' })
+      lastSpeechInsertionRef.current = { cellId: targetCellId, start: 0, end: latex.length }
+      setSpeechCorrectionHighlight(highlightRange ? { cellId: targetCellId, ...highlightRange } : null)
+      focusCellEditorById(targetCellId)
+      return
+    }
+
+    if (action.type === 'insert') {
+      appendToCellLatex(
+        targetCellId,
+        action.insertMode === 'text' ? speechPlainTextToLatex(action.text) : action.text,
+        document,
+        true,
+      )
+    }
+  }, [activateCellForExternalInput, appendToCellLatex, document, documentWithVisibleEditorState, fallbackCellId, focusCellEditorById, handleSpeechCommand, updateDocument])
 
   const getCurrentSpeechRowLatex = useCallback(() => {
-    return activeCellHandleRef.current?.getLatex() ?? ''
-  }, [])
+    if (!document) return ''
+
+    const targetCellId = fallbackCellId(document)
+    if (targetCellId && targetCellId === activeCellId) {
+      return activeCellHandleRef.current?.getLatex() ?? document.cells.find((cell) => cell.id === targetCellId)?.latex ?? ''
+    }
+
+    return targetCellId ? document.cells.find((cell) => cell.id === targetCellId)?.latex ?? '' : ''
+  }, [activeCellId, document, fallbackCellId])
 
   const handlePrepareSpeechInput = useCallback(() => {
     if (!document) return
-    if (activeCellId !== null) return
-    setActiveCellId(document.cells[0]?.id ?? null)
-  }, [activeCellId, document])
+    activateCellForExternalInput(fallbackCellId(document))
+  }, [activateCellForExternalInput, document, fallbackCellId])
 
   const handleFormatText = (format: TextFormatCommand) => {
     activeCellHandleRef.current?.format(format)
@@ -742,6 +1276,7 @@ function App() {
     typingHistoryGroupRef.current = null
     setSelectedCellIds(new Set())
     rowSelectionAnchorRef.current = null
+    lastActiveCellIdRef.current = cellId
     setActiveCellId(cellId)
   }
 
@@ -815,11 +1350,13 @@ function App() {
     await handleCopySelection(format)
   }, [handleCopySelection])
 
-  const handleDeleteSelectedCells = useCallback(() => {
+  const handleDeleteSelectedCells = useCallback((skipConfirmation = false) => {
     if (!document || selectedCellIds.size === 0) return
 
     const selectedRows = document.cells.filter((cell) => selectedCellIds.has(cell.id))
     if (selectedRows.length === 0) return
+
+    if (!skipConfirmation && !confirmDeleteRows(selectedRows.length)) return
 
     const firstSelectedIndex = document.cells.findIndex((cell) => selectedCellIds.has(cell.id))
     const remainingCells = document.cells.filter((cell) => !selectedCellIds.has(cell.id))
@@ -845,9 +1382,14 @@ function App() {
       return
     }
 
+    if (!document) return
+
+    const selectedRows = document.cells.filter((cell) => selectedCellIds.has(cell.id))
+    if (selectedRows.length === 0 || !confirmDeleteRows(selectedRows.length)) return
+
     await handleCopySelection()
-    handleDeleteSelectedCells()
-  }, [handleCopySelection, handleDeleteSelectedCells, selectedCellIds.size])
+    handleDeleteSelectedCells(true)
+  }, [document, handleCopySelection, handleDeleteSelectedCells, selectedCellIds, selectedCellIds.size])
 
   useEffect(() => {
     const handleEditorCommandKeyDown = (event: KeyboardEvent) => {
@@ -954,7 +1496,7 @@ function App() {
           <button
             className="window-control-button window-control-close"
             type="button"
-            onClick={() => void window.eqoustics.windowControl('close')}
+            onClick={handleCloseWindow}
             aria-label="Close window"
             title="Close"
           >
@@ -963,7 +1505,7 @@ function App() {
         </div>
       </header>
       <EditorToolbar
-        hasActiveCell={activeCellId !== null}
+        hasActiveCell={document.cells.length > 0}
         onInsertSnippet={handleInsertSnippet}
         onFormatText={handleFormatText}
         onCreateLink={handleCreateLink}
@@ -994,6 +1536,7 @@ function App() {
         onCutContent={handleCutSelection}
         onDeleteSelection={handleDeleteSelectedCells}
         onMenuVisibilityChange={setIsToolbarMenuOpen}
+        helpMenuRequest={helpMenuRequest}
       />
       <div className="document-scroll-region">
         <FloatingSpeechControl
@@ -1001,7 +1544,8 @@ function App() {
           microphoneDeviceId={appSettings.microphoneDeviceId}
           getCurrentRowLatex={getCurrentSpeechRowLatex}
           onBeforeListen={handlePrepareSpeechInput}
-          onTranscript={handleSpeechTranscript}
+          onProcessingChange={setIsGemmaProcessing}
+          onSpeechResult={handleSpeechResult}
         />
         {tableOfContentsHeadings.length > 0 ? (
           <aside
@@ -1076,9 +1620,16 @@ function App() {
             selectedCellIds={selectedCellIds}
             onSelectCellRows={handleSelectCellRows}
             onExtendCellRowSelection={handleExtendCellRowSelection}
+            correctionHighlight={speechCorrectionHighlight}
           />
         </section>
         <CustomScrollbar targetRef={documentShellRef} />
+        {isGemmaProcessing ? (
+          <span className="gemma-processing-indicator cell-button-tooltip-wrap" role="status" aria-label="Gemma Processing">
+            <span className="gemma-processing-spinner" aria-hidden="true" />
+            <span className="cell-button-tooltip gemma-processing-tooltip">Gemma Processing</span>
+          </span>
+        ) : null}
       </div>
       {linkPrompt ? (
         <div className="link-prompt-backdrop" role="presentation" onMouseDown={() => setLinkPrompt(null)}>

@@ -22,6 +22,9 @@ app.asar
 # Environment files
 .env
 .env.*
+.eqoustics-python/
+.eqoustics-python-cache/
+.eqoustics-python-portable/
 
 # Logs
 logs/

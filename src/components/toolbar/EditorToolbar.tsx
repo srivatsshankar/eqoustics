@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faSquare as faSquareRegular } from '@fortawesome/free-regular-svg-icons'
 import {
@@ -27,15 +27,18 @@ import {
   faPalette,
   faBrain,
   faCheck,
+  faPlus,
+  faXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { CustomScrollbar } from '../scrollbar/CustomScrollbar'
 import { CasesDropdown } from './CasesDropdown'
 import { MatrixDropdown } from './MatrixDropdown'
 import type { TextFormatCommand } from '../cell/CellEditor'
 import type { CopyAsFormat } from '../../clipboard/editorClipboard'
+import helpMarkdown from '../../help/eqoustics-help.md?raw'
 import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
 import type { RecentFileEntry } from '../../shared/types/notebook'
-import type { AppSettingsPayload, AppSettingsUpdatePayload } from '../../shared/ipc/channels'
+import type { AppSettingsPayload, AppSettingsUpdatePayload, SpeechCommandInfo } from '../../shared/ipc/channels'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
@@ -69,6 +72,7 @@ interface EditorToolbarProps {
   onCutContent: () => void | Promise<void>
   onDeleteSelection: () => void
   onMenuVisibilityChange?: (isOpen: boolean) => void
+  helpMenuRequest?: { id: number; action: 'toggle' | 'close' } | null
 }
 
 interface SymbolItem {
@@ -103,6 +107,18 @@ interface DelimiterSizePreset {
   right: string
 }
 
+interface HelpSearchState {
+  query: string
+  activeIndex: number
+  currentIndex: number
+}
+
+const SPEECH_COMMAND_CATEGORY_GROUPS: Array<{ category: SpeechCommandInfo['category']; label: string }> = [
+  { category: 'navigation', label: 'Navigation' },
+  { category: 'formatting', label: 'Formatting' },
+  { category: 'microphone', label: 'Microphone' },
+]
+
 function commandDisplay(value: string): string {
   if (LATEX_COMMAND_PREVIEWS[value]) return LATEX_COMMAND_PREVIEWS[value]
   if (value.startsWith('\\')) return value.slice(1)
@@ -120,6 +136,444 @@ function commandItems(values: string[]): SymbolItem[] {
     title: commandTitle(value),
     mode: value.startsWith('\\') ? 'cmd' : 'write',
   }))
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function countTextMatches(text: string, query: string): number {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) return 0
+
+  return Array.from(text.matchAll(new RegExp(escapeRegExp(normalizedQuery), 'gi'))).length
+}
+
+function renderSearchText(text: string, searchState?: HelpSearchState, keyPrefix = 'text'): React.ReactNode[] {
+  const query = searchState?.query.trim()
+  if (!searchState || !query) return [text]
+
+  const nodes: React.ReactNode[] = []
+  const regex = new RegExp(escapeRegExp(query), 'gi')
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index))
+    }
+
+    const matchIndex = searchState.currentIndex
+    searchState.currentIndex += 1
+    nodes.push(
+      <mark
+        key={`${keyPrefix}-${match.index}-${matchIndex}`}
+        className={matchIndex === searchState.activeIndex ? 'help-search-match help-search-match-active' : 'help-search-match'}
+      >
+        {match[0]}
+      </mark>,
+    )
+    cursor = match.index + match[0].length
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor))
+  }
+
+  return nodes
+}
+
+function renderInlineMarkdown(text: string, searchState?: HelpSearchState): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  const pattern = /(`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(...renderSearchText(text.slice(cursor, match.index), searchState, `plain-${match.index}`))
+    }
+
+    const token = match[0]
+    if (token.startsWith('`')) {
+      nodes.push(<code key={`code-${match.index}`}>{renderSearchText(token.slice(1, -1), searchState, `code-${match.index}`)}</code>)
+    } else {
+      const label = match[2] ?? ''
+      const href = match[3] ?? ''
+      const isSafeHref = /^(https?:|mailto:)/i.test(href)
+      nodes.push(
+        <a key={`link-${match.index}`} href={isSafeHref ? href : undefined} target="_blank" rel="noreferrer">
+          {renderSearchText(label, searchState, `link-${match.index}`)}
+        </a>,
+      )
+    }
+
+    cursor = match.index + token.length
+  }
+
+  if (cursor < text.length) {
+    nodes.push(...renderSearchText(text.slice(cursor), searchState, `tail-${cursor}`))
+  }
+
+  return nodes
+}
+
+function countInlineMarkdownMatches(text: string, query: string): number {
+  const pattern = /(`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g
+  let cursor = 0
+  let count = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      count += countTextMatches(text.slice(cursor, match.index), query)
+    }
+
+    count += countTextMatches(match[0].startsWith('`') ? match[0].slice(1, -1) : match[2] ?? '', query)
+    cursor = match.index + match[0].length
+  }
+
+  if (cursor < text.length) {
+    count += countTextMatches(text.slice(cursor), query)
+  }
+
+  return count
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const cells: string[] = []
+  let current = ''
+  let escaped = false
+
+  for (const char of line.trim()) {
+    if (escaped) {
+      current += char === '|' ? char : `\\${char}`
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+
+    if (char === '|') {
+      cells.push(current.trim())
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  cells.push(current.trim())
+  if (escaped) {
+    cells[cells.length - 1] += '\\'
+  }
+  return cells.slice(1, -1)
+}
+
+function renderHelpMarkdown(markdown: string, searchState?: HelpSearchState): React.ReactNode[] {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const nodes: React.ReactNode[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index]
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      index += 1
+      continue
+    }
+
+    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(trimmed)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const children = renderInlineMarkdown(headingMatch[2], searchState)
+      if (level === 1) nodes.push(<h1 key={index}>{children}</h1>)
+      else if (level === 2) nodes.push(<h2 key={index}>{children}</h2>)
+      else if (level === 3) nodes.push(<h3 key={index}>{children}</h3>)
+      else nodes.push(<h4 key={index}>{children}</h4>)
+      index += 1
+      continue
+    }
+
+    if (
+      trimmed.startsWith('|')
+      && index + 1 < lines.length
+      && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
+    ) {
+      const headerCells = splitMarkdownTableRow(trimmed)
+      const rows: string[][] = []
+      index += 2
+
+      while (index < lines.length && lines[index].trim().startsWith('|')) {
+        rows.push(splitMarkdownTableRow(lines[index]))
+        index += 1
+      }
+
+      nodes.push(
+        <table key={index}>
+          <thead>
+            <tr>
+              {headerCells.map((cell, cellIndex) => (
+                <th key={cellIndex}>{renderInlineMarkdown(cell, searchState)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {headerCells.map((_cell, cellIndex) => (
+                  <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? '', searchState)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>,
+      )
+      continue
+    }
+
+    const listMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(trimmed)
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1])
+      const items: string[] = []
+      while (index < lines.length) {
+        const itemMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(lines[index].trim())
+        if (!itemMatch || /\d+\./.test(itemMatch[1]) !== ordered) break
+        items.push(itemMatch[2])
+        index += 1
+      }
+
+      const listItems = items.map((item, itemIndex) => (
+        <li key={itemIndex}>{renderInlineMarkdown(item, searchState)}</li>
+      ))
+      nodes.push(ordered ? <ol key={index}>{listItems}</ol> : <ul key={index}>{listItems}</ul>)
+      continue
+    }
+
+    const paragraphLines = [trimmed]
+    index += 1
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !/^(#{1,4})\s+/.test(lines[index].trim())
+      && !/^([-*]|\d+\.)\s+/.test(lines[index].trim())
+    ) {
+      paragraphLines.push(lines[index].trim())
+      index += 1
+    }
+
+    nodes.push(<p key={index}>{renderInlineMarkdown(paragraphLines.join(' '), searchState)}</p>)
+  }
+
+  return nodes
+}
+
+function countHelpMarkdownMatches(markdown: string, query: string): number {
+  if (!query.trim()) return 0
+
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  let index = 0
+  let count = 0
+
+  while (index < lines.length) {
+    const trimmed = lines[index].trim()
+    if (!trimmed) {
+      index += 1
+      continue
+    }
+
+    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(trimmed)
+    if (headingMatch) {
+      count += countInlineMarkdownMatches(headingMatch[2], query)
+      index += 1
+      continue
+    }
+
+    if (
+      trimmed.startsWith('|')
+      && index + 1 < lines.length
+      && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
+    ) {
+      splitMarkdownTableRow(trimmed).forEach((cell) => {
+        count += countInlineMarkdownMatches(cell, query)
+      })
+      index += 2
+
+      while (index < lines.length && lines[index].trim().startsWith('|')) {
+        splitMarkdownTableRow(lines[index]).forEach((cell) => {
+          count += countInlineMarkdownMatches(cell, query)
+        })
+        index += 1
+      }
+      continue
+    }
+
+    const listMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(trimmed)
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1])
+      while (index < lines.length) {
+        const itemMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(lines[index].trim())
+        if (!itemMatch || /\d+\./.test(itemMatch[1]) !== ordered) break
+        count += countInlineMarkdownMatches(itemMatch[2], query)
+        index += 1
+      }
+      continue
+    }
+
+    const paragraphLines = [trimmed]
+    index += 1
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !/^(#{1,4})\s+/.test(lines[index].trim())
+      && !/^([-*]|\d+\.)\s+/.test(lines[index].trim())
+    ) {
+      paragraphLines.push(lines[index].trim())
+      index += 1
+    }
+    count += countInlineMarkdownMatches(paragraphLines.join(' '), query)
+  }
+
+  return count
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function inlineMarkdownToHtml(text: string): string {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+|mailto:[^)]+)\)/g, '<a href="$2">$1</a>')
+}
+
+function helpMarkdownToPdfHtml(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const headings = lines
+    .map((line) => /^(#{2,4})\s+(.+)$/.exec(line.trim()))
+    .filter((match): match is RegExpExecArray => Boolean(match))
+    .map((match, index) => ({
+      id: `section-${index + 1}`,
+      level: match[1].length,
+      title: match[2],
+    }))
+  let headingIndex = 0
+  let index = 0
+  const blocks: string[] = []
+
+  while (index < lines.length) {
+    const trimmed = lines[index].trim()
+    if (!trimmed || /^#\s+/.test(trimmed)) {
+      index += 1
+      continue
+    }
+
+    const headingMatch = /^(#{2,4})\s+(.+)$/.exec(trimmed)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const heading = headings[headingIndex]
+      headingIndex += 1
+      const tag = `h${Math.min(level, 4)}`
+      blocks.push(`<section class="manual-section"><${tag} id="${heading.id}">${inlineMarkdownToHtml(heading.title)}</${tag}>`)
+      index += 1
+      continue
+    }
+
+    if (
+      trimmed.startsWith('|')
+      && index + 1 < lines.length
+      && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
+    ) {
+      const headerCells = splitMarkdownTableRow(trimmed)
+      const rows: string[][] = []
+      index += 2
+      while (index < lines.length && lines[index].trim().startsWith('|')) {
+        rows.push(splitMarkdownTableRow(lines[index]))
+        index += 1
+      }
+      blocks.push(`<table><thead><tr>${headerCells.map((cell) => `<th>${inlineMarkdownToHtml(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${headerCells.map((_cell, cellIndex) => `<td>${inlineMarkdownToHtml(row[cellIndex] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`)
+      continue
+    }
+
+    const listMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(trimmed)
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1])
+      const tag = ordered ? 'ol' : 'ul'
+      const items: string[] = []
+      while (index < lines.length) {
+        const itemMatch = /^([-*]|\d+\.)\s+(.+)$/.exec(lines[index].trim())
+        if (!itemMatch || /\d+\./.test(itemMatch[1]) !== ordered) break
+        items.push(`<li>${inlineMarkdownToHtml(itemMatch[2])}</li>`)
+        index += 1
+      }
+      blocks.push(`<${tag}>${items.join('')}</${tag}>`)
+      continue
+    }
+
+    const paragraphLines = [trimmed]
+    index += 1
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !/^(#{1,4})\s+/.test(lines[index].trim())
+      && !/^([-*]|\d+\.)\s+/.test(lines[index].trim())
+    ) {
+      paragraphLines.push(lines[index].trim())
+      index += 1
+    }
+    blocks.push(`<p>${inlineMarkdownToHtml(paragraphLines.join(' '))}</p>`)
+  }
+
+  const closedBlocks = blocks.join('\n').replace(/(<section class="manual-section">)/g, '</section>$1').replace(/^<\/section>/, '') + '</section>'
+  const toc = headings.map((heading) => `<li class="toc-level-${heading.level}"><a href="#${heading.id}">${inlineMarkdownToHtml(heading.title)}</a></li>`).join('')
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Eqoustics Manual</title>
+    <style>
+      body { margin: 0; padding: 48px 56px; color: #111827; font-family: "Segoe UI", Arial, sans-serif; line-height: 1.45; }
+      h1 { margin: 0 0 1rem; font-size: 32px; }
+      h2 { font-size: 24px; margin: 0 0 1rem; }
+      h3 { font-size: 18px; margin: 1rem 0 0.5rem; }
+      h4 { font-size: 15px; margin: 0.9rem 0 0.45rem; }
+      p { margin: 0 0 0.75rem; }
+      code { font-family: Consolas, "Liberation Mono", monospace; background: #f1f5f9; padding: 0.06rem 0.18rem; border-radius: 3px; }
+      .manual-cover { break-after: page; }
+      .manual-toc { break-after: page; }
+      .manual-toc ol { padding-left: 1.25rem; }
+      .toc-level-3 { margin-left: 1rem; }
+      .toc-level-4 { margin-left: 2rem; }
+      .manual-section { break-before: page; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 10px; }
+      th, td { border: 1px solid #cbd5e1; padding: 4px 5px; vertical-align: top; overflow-wrap: anywhere; }
+      th { background: #f8fafc; text-align: left; }
+      tr { break-inside: avoid; }
+      @page { margin: 0.55in; }
+    </style>
+  </head>
+  <body>
+    <section class="manual-cover">
+      <h1>Eqoustics Manual</h1>
+      <p>Reference instructions for using Eqoustics.</p>
+    </section>
+    <nav class="manual-toc">
+      <h2>Table of Contents</h2>
+      <ol>${toc}</ol>
+    </nav>
+    ${closedBlocks}
+  </body>
+</html>`
 }
 
 function latexSlotItem(display: React.ReactNode, value: string, title = commandTitle(value, typeof display === 'string' ? display : value)): SymbolItem {
@@ -1545,6 +1999,7 @@ export function EditorToolbar({
   onCutContent,
   onDeleteSelection,
   onMenuVisibilityChange,
+  helpMenuRequest,
 }: EditorToolbarProps) {
   const inlineSymbolGroups = SYMBOL_GROUPS.filter((group) => !DROPDOWN_GROUP_LABEL_SET.has(group.label))
   const dropdownSymbolGroups = DROPDOWN_GROUP_LABELS
@@ -1554,18 +2009,85 @@ export function EditorToolbar({
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false)
   const [isCommandsMenuOpen, setIsCommandsMenuOpen] = useState(false)
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false)
+  const [isHelpMenuOpen, setIsHelpMenuOpen] = useState(false)
+  const [helpSearchQuery, setHelpSearchQuery] = useState('')
+  const [activeHelpMatchIndex, setActiveHelpMatchIndex] = useState(0)
+  const [isManualPdfExporting, setIsManualPdfExporting] = useState(false)
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false)
   const [isCopyAsMenuOpen, setIsCopyAsMenuOpen] = useState(false)
   const [isMicrophoneMenuOpen, setIsMicrophoneMenuOpen] = useState(false)
+  const [speechCommands, setSpeechCommands] = useState<SpeechCommandInfo[] | null>(null)
+  const [speechCommandsError, setSpeechCommandsError] = useState<string | null>(null)
+  const [activeAliasCommand, setActiveAliasCommand] = useState<string | null>(null)
+  const [aliasDraft, setAliasDraft] = useState('')
+  const [aliasNotice, setAliasNotice] = useState<string | null>(null)
+  const [aliasError, setAliasError] = useState<string | null>(null)
+  const [aliasSavingCommand, setAliasSavingCommand] = useState<string | null>(null)
   const fileMenuContainerRef = useRef<HTMLElement | null>(null)
   const microphoneMenuRef = useRef<HTMLDivElement | null>(null)
+  const aliasInputRef = useRef<HTMLInputElement | null>(null)
+  const helpContentRef = useRef<HTMLElement | null>(null)
+  const helpSearchInputRef = useRef<HTMLInputElement | null>(null)
+  const helpMatchCount = useMemo(() => countHelpMarkdownMatches(helpMarkdown, helpSearchQuery), [helpSearchQuery])
+  const renderedHelpMarkdown = useMemo(() => {
+    const searchState: HelpSearchState = {
+      query: helpSearchQuery,
+      activeIndex: activeHelpMatchIndex,
+      currentIndex: 0,
+    }
+    return renderHelpMarkdown(helpMarkdown, searchState)
+  }, [activeHelpMatchIndex, helpSearchQuery])
+  const speechCommandGroups = useMemo(() => {
+    if (!speechCommands) return []
+
+    return SPEECH_COMMAND_CATEGORY_GROUPS
+      .map((group) => ({
+        ...group,
+        commands: speechCommands.filter((command) => command.category === group.category),
+      }))
+      .filter((group) => group.commands.length > 0)
+  }, [speechCommands])
 
   useEffect(() => {
-    onMenuVisibilityChange?.(isFileMenuOpen || isEditMenuOpen || isCommandsMenuOpen || isSettingsMenuOpen)
-  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isSettingsMenuOpen, onMenuVisibilityChange])
+    onMenuVisibilityChange?.(isFileMenuOpen || isEditMenuOpen || isCommandsMenuOpen || isSettingsMenuOpen || isHelpMenuOpen)
+  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isHelpMenuOpen, isSettingsMenuOpen, onMenuVisibilityChange])
 
   useEffect(() => {
-    if (!isFileMenuOpen && !isEditMenuOpen && !isCommandsMenuOpen && !isSettingsMenuOpen) {
+    if (!helpMenuRequest) return
+
+    setIsHelpMenuOpen((current) => (helpMenuRequest.action === 'toggle' ? !current : false))
+    setIsFileMenuOpen(false)
+    setIsEditMenuOpen(false)
+    setIsCommandsMenuOpen(false)
+    setIsSettingsMenuOpen(false)
+    setIsExportMenuOpen(false)
+    setIsCopyAsMenuOpen(false)
+    setIsMicrophoneMenuOpen(false)
+  }, [helpMenuRequest])
+
+  useEffect(() => {
+    if (helpMatchCount === 0 && activeHelpMatchIndex !== 0) {
+      setActiveHelpMatchIndex(0)
+    } else if (helpMatchCount > 0 && activeHelpMatchIndex >= helpMatchCount) {
+      setActiveHelpMatchIndex(helpMatchCount - 1)
+    }
+  }, [activeHelpMatchIndex, helpMatchCount])
+
+  useEffect(() => {
+    if (!isHelpMenuOpen) return
+    helpSearchInputRef.current?.focus()
+  }, [isHelpMenuOpen])
+
+  useEffect(() => {
+    if (!isHelpMenuOpen || !helpSearchQuery.trim()) return
+    helpContentRef.current?.querySelector('.help-search-match-active')?.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+    })
+  }, [activeHelpMatchIndex, helpSearchQuery, isHelpMenuOpen, renderedHelpMarkdown])
+
+  useEffect(() => {
+    if (!isFileMenuOpen && !isEditMenuOpen && !isCommandsMenuOpen && !isSettingsMenuOpen && !isHelpMenuOpen) {
       return
     }
 
@@ -1575,6 +2097,7 @@ export function EditorToolbar({
         setIsEditMenuOpen(false)
         setIsCommandsMenuOpen(false)
         setIsSettingsMenuOpen(false)
+        setIsHelpMenuOpen(false)
         setIsExportMenuOpen(false)
         setIsCopyAsMenuOpen(false)
         setIsMicrophoneMenuOpen(false)
@@ -1583,7 +2106,7 @@ export function EditorToolbar({
 
     document.addEventListener('mousedown', handleOutsideClick)
     return () => document.removeEventListener('mousedown', handleOutsideClick)
-  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isSettingsMenuOpen])
+  }, [isCommandsMenuOpen, isEditMenuOpen, isFileMenuOpen, isHelpMenuOpen, isSettingsMenuOpen])
 
   useEffect(() => {
     if (!isMicrophoneMenuOpen) return
@@ -1598,12 +2121,97 @@ export function EditorToolbar({
     return () => document.removeEventListener('mousedown', handleOutsideMicrophoneClick)
   }, [isMicrophoneMenuOpen])
 
+  useEffect(() => {
+    if (!isCommandsMenuOpen || speechCommands) return
+
+    let isMounted = true
+    setSpeechCommandsError(null)
+    void window.eqoustics.listSpeechCommands()
+      .then((commands) => {
+        if (isMounted) {
+          setSpeechCommands(commands)
+        }
+      })
+      .catch((error: unknown) => {
+        if (isMounted) {
+          setSpeechCommandsError(error instanceof Error ? error.message : String(error))
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [isCommandsMenuOpen, speechCommands])
+
+  useEffect(() => {
+    if (!activeAliasCommand) return
+    aliasInputRef.current?.focus()
+  }, [activeAliasCommand])
+
+  const beginAliasCreation = (command: SpeechCommandInfo) => {
+    if (!command.canCreateAliases) return
+    setActiveAliasCommand(command.command)
+    setAliasDraft('')
+    setAliasNotice(`Create a text snippet that functions as an alias for "${command.name}".`)
+    setAliasError(null)
+  }
+
+  const cancelAliasCreation = () => {
+    setActiveAliasCommand(null)
+    setAliasDraft('')
+    setAliasNotice(null)
+    setAliasError(null)
+  }
+
+  const saveAlias = async (command: SpeechCommandInfo) => {
+    const alias = aliasDraft.trim()
+    if (!alias) {
+      setAliasError('Alias cannot be empty.')
+      return
+    }
+
+    setAliasSavingCommand(command.command)
+    setAliasError(null)
+    try {
+      const commands = await window.eqoustics.addSpeechCommandAlias({ command: command.command, alias })
+      setSpeechCommands(commands)
+      setActiveAliasCommand(null)
+      setAliasDraft('')
+      setAliasNotice(null)
+    } catch (error) {
+      setAliasError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAliasSavingCommand(null)
+    }
+  }
+
+  const deleteAlias = async (command: SpeechCommandInfo, alias: string) => {
+    const shouldDelete = window.confirm(`Delete the alias "${alias}"?`)
+    if (!shouldDelete) return
+
+    setAliasSavingCommand(command.command)
+    setAliasError(null)
+    try {
+      const commands = await window.eqoustics.deleteSpeechCommandAlias({ command: command.command, alias })
+      setSpeechCommands(commands)
+      if (activeAliasCommand === command.command) {
+        cancelAliasCreation()
+      }
+    } catch (error) {
+      setActiveAliasCommand(command.command)
+      setAliasError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAliasSavingCommand(null)
+    }
+  }
+
   const executeFileAction = (action: () => void | Promise<void>) => {
     void action()
     setIsFileMenuOpen(false)
     setIsEditMenuOpen(false)
     setIsCommandsMenuOpen(false)
     setIsSettingsMenuOpen(false)
+    setIsHelpMenuOpen(false)
     setIsExportMenuOpen(false)
     setIsCopyAsMenuOpen(false)
     setIsMicrophoneMenuOpen(false)
@@ -1615,9 +2223,29 @@ export function EditorToolbar({
     setIsEditMenuOpen(false)
     setIsCommandsMenuOpen(false)
     setIsSettingsMenuOpen(false)
+    setIsHelpMenuOpen(false)
     setIsExportMenuOpen(false)
     setIsCopyAsMenuOpen(false)
     setIsMicrophoneMenuOpen(false)
+  }
+  const goToPreviousHelpMatch = () => {
+    if (helpMatchCount === 0) return
+    setActiveHelpMatchIndex((current) => (current - 1 + helpMatchCount) % helpMatchCount)
+  }
+  const goToNextHelpMatch = () => {
+    if (helpMatchCount === 0) return
+    setActiveHelpMatchIndex((current) => (current + 1) % helpMatchCount)
+  }
+  const exportHelpManualPdf = async () => {
+    setIsManualPdfExporting(true)
+    try {
+      await window.eqoustics.exportNotebookPdf({
+        title: 'Eqoustics Manual',
+        html: helpMarkdownToPdfHtml(helpMarkdown),
+      })
+    } finally {
+      setIsManualPdfExporting(false)
+    }
   }
   const visibleRecentFiles = [...recentFiles]
     .sort((left, right) => Date.parse(right.lastOpenedAt) - Date.parse(left.lastOpenedAt))
@@ -1640,6 +2268,7 @@ export function EditorToolbar({
               setIsEditMenuOpen(false)
               setIsCommandsMenuOpen(false)
               setIsSettingsMenuOpen(false)
+              setIsHelpMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
               setIsMicrophoneMenuOpen(false)
@@ -1658,6 +2287,7 @@ export function EditorToolbar({
               setIsFileMenuOpen(false)
               setIsCommandsMenuOpen(false)
               setIsSettingsMenuOpen(false)
+              setIsHelpMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
               setIsMicrophoneMenuOpen(false)
@@ -1676,6 +2306,7 @@ export function EditorToolbar({
               setIsFileMenuOpen(false)
               setIsEditMenuOpen(false)
               setIsSettingsMenuOpen(false)
+              setIsHelpMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
               setIsMicrophoneMenuOpen(false)
@@ -1694,6 +2325,7 @@ export function EditorToolbar({
               setIsFileMenuOpen(false)
               setIsEditMenuOpen(false)
               setIsCommandsMenuOpen(false)
+              setIsHelpMenuOpen(false)
               setIsExportMenuOpen(false)
               setIsCopyAsMenuOpen(false)
               setIsMicrophoneMenuOpen(false)
@@ -1701,6 +2333,25 @@ export function EditorToolbar({
             }}
           >
             <span>Settings</span>
+          </button>
+          <button
+            type="button"
+            className={`menu-bar-button${isHelpMenuOpen ? ' menu-bar-button-open' : ''}`}
+            aria-haspopup="dialog"
+            aria-expanded={isHelpMenuOpen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setIsHelpMenuOpen((current) => !current)
+              setIsFileMenuOpen(false)
+              setIsEditMenuOpen(false)
+              setIsCommandsMenuOpen(false)
+              setIsSettingsMenuOpen(false)
+              setIsExportMenuOpen(false)
+              setIsCopyAsMenuOpen(false)
+              setIsMicrophoneMenuOpen(false)
+            }}
+          >
+            <span>Help</span>
           </button>
         </div>
       </div>
@@ -2125,7 +2776,136 @@ export function EditorToolbar({
         </button>
       </div>
       <div className={`file-menu-drawer commands-menu-drawer${isCommandsMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Commands">
-        <div className="file-menu-empty">Commands will be available here.</div>
+        {speechCommandsError ? (
+          <div className="file-menu-empty">Unable to load commands: {speechCommandsError}</div>
+        ) : speechCommands ? (
+          speechCommands.length > 0 ? (
+            <div className="speech-command-list">
+              {speechCommandGroups.map((group) => (
+                <section key={group.category} className="speech-command-category" aria-labelledby={`speech-command-category-${group.category}`}>
+                  <h3 id={`speech-command-category-${group.category}`} className="file-menu-section-label speech-command-category-heading">{group.label}</h3>
+                  <div className="speech-command-category-list">
+                    {group.commands.map((command) => {
+                      const userAliases = new Set(command.userAliases ?? [])
+                      const isEditingAlias = activeAliasCommand === command.command
+                      const isSavingAlias = aliasSavingCommand === command.command
+
+                      return (
+                        <details key={command.command} className="speech-command-accordion">
+                          <summary className="speech-command-summary">
+                            <span>{command.name}</span>
+                            <FontAwesomeIcon icon={faChevronDown} />
+                          </summary>
+                          <div className="speech-command-details">
+                            <p>{command.description}</p>
+                            {command.aliases.length > 0 || command.canCreateAliases ? (
+                              <div className="speech-command-aliases">
+                                <span className="file-menu-section-label speech-command-alias-label">Aliases</span>
+                                <div className="speech-command-alias-list">
+                                  {command.aliases.map((alias) => {
+                                    const isUserAlias = userAliases.has(alias)
+                                    return (
+                                      <span key={alias} className={`speech-command-alias${isUserAlias ? ' speech-command-alias-user' : ''}`}>
+                                        <span>{alias}</span>
+                                        {isUserAlias ? (
+                                          <button
+                                            type="button"
+                                            className="speech-command-alias-delete"
+                                            title="delete alias"
+                                            aria-label={`Delete alias ${alias}`}
+                                            disabled={isSavingAlias}
+                                            onClick={() => {
+                                              void deleteAlias(command, alias)
+                                            }}
+                                          >
+                                            <FontAwesomeIcon icon={faXmark} />
+                                          </button>
+                                        ) : null}
+                                      </span>
+                                    )
+                                  })}
+                                  {command.canCreateAliases ? (
+                                    <span className="cell-button-tooltip-wrap speech-command-alias-tooltip-wrap">
+                                      <button
+                                        type="button"
+                                        className="speech-command-alias-add"
+                                        aria-label={`Create an alias for ${command.name}`}
+                                        disabled={isSavingAlias}
+                                        onClick={() => beginAliasCreation(command)}
+                                      >
+                                        <FontAwesomeIcon icon={faPlus} />
+                                      </button>
+                                      <span className="cell-button-tooltip">Create an alias</span>
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {isEditingAlias ? (
+                                  <>
+                                    {aliasNotice ? (
+                                      <div className="speech-command-alias-notice" role="status" aria-live="polite">{aliasNotice}</div>
+                                    ) : null}
+                                    <form
+                                      className="speech-command-alias-form"
+                                      onSubmit={(event) => {
+                                        event.preventDefault()
+                                        void saveAlias(command)
+                                      }}
+                                    >
+                                      <input
+                                        ref={aliasInputRef}
+                                        value={aliasDraft}
+                                        placeholder="Text snippet"
+                                        aria-label={`New alias for ${command.name}`}
+                                        disabled={isSavingAlias}
+                                        onChange={(event) => {
+                                          setAliasDraft(event.target.value)
+                                          setAliasError(null)
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Escape') {
+                                            event.preventDefault()
+                                            cancelAliasCreation()
+                                          }
+                                        }}
+                                      />
+                                      <button type="submit" title="save alias" aria-label="Save alias" disabled={isSavingAlias}>
+                                        <FontAwesomeIcon icon={faCheck} />
+                                      </button>
+                                      <button type="button" title="cancel" aria-label="Cancel alias creation" disabled={isSavingAlias} onClick={cancelAliasCreation}>
+                                        <FontAwesomeIcon icon={faXmark} />
+                                      </button>
+                                    </form>
+                                  </>
+                                ) : null}
+                                {isEditingAlias && aliasError ? (
+                                  <div className="speech-command-alias-error" role="alert">{aliasError}</div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        </details>
+                      )
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <div className="file-menu-empty">No commands available.</div>
+          )
+        ) : (
+          <div className="speech-command-loading" role="status" aria-live="polite">
+            <span className="speech-command-loading-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="speech-command-loading-text">
+              <span>Loading commands</span>
+              <span>Just a moment while they are prepared.</span>
+            </span>
+          </div>
+        )}
       </div>
       <div className={`file-menu-drawer settings-menu-drawer${isSettingsMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Settings">
         <section className="settings-menu-section" aria-labelledby="settings-microphone-label">
@@ -2237,11 +3017,82 @@ export function EditorToolbar({
             ))}
           </div>
           <p className="settings-menu-note">
-            Eqoustics chooses the best Gemma model for your system for speech recognition, but you can change the preferred model based on your requirements. Please note that changing the model can affect performance.
+            Eqoustics recommends the 2B model for most users and system configurations. However, you can change the preferred model. Please note that changing the model can affect performance.
           </p>
+          <div className="settings-subsection">
+            <span className="file-menu-section-label">Acceleration</span>
+            <div className="settings-segmented-control" role="radiogroup" aria-label="Speech acceleration">
+              {[
+                { value: 'gpu', label: 'GPU' },
+                { value: 'cpu', label: 'CPU' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`settings-segment${appSettings.speechAcceleration === option.value ? ' settings-segment-active' : ''}`}
+                  role="radio"
+                  aria-checked={appSettings.speechAcceleration === option.value}
+                  onClick={() => { void onUpdateSettings({ speechAcceleration: option.value as AppSettingsPayload['speechAcceleration'] }) }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="settings-menu-note">
+              GPU acceleration runs both audio and text inference on GPU, if the system is capable of running GPU reference.
+            </p>
+          </div>
+          <div className="settings-subsection">
+            <span className="file-menu-section-label">Inference runtime</span>
+            <div className="settings-segmented-control" role="radiogroup" aria-label="Speech inference runtime">
+              {[
+                { value: 'litert', label: 'LiteRT' },
+                { value: 'transformers', label: 'Transformers' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`settings-segment${appSettings.speechInferenceRuntime === option.value ? ' settings-segment-active' : ''}`}
+                  role="radio"
+                  aria-checked={appSettings.speechInferenceRuntime === option.value}
+                  onClick={() => { void onUpdateSettings({ speechInferenceRuntime: option.value as AppSettingsPayload['speechInferenceRuntime'] }) }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="settings-menu-note">
+              Transformers uses the Hugging Face Gemma checkpoints. LiteRT uses the local LiteRT model package.
+            </p>
+          </div>
+          {appSettings.speechInferenceRuntime === 'transformers' ? (
+            <div className="settings-subsection">
+              <span className="file-menu-section-label">Transformers MTP</span>
+              <div className="settings-segmented-control" role="radiogroup" aria-label="Transformers multi-token prediction">
+                {[
+                  { value: true, label: 'On' },
+                  { value: false, label: 'Off' },
+                ].map((option) => (
+                  <button
+                    key={String(option.value)}
+                    type="button"
+                    className={`settings-segment${appSettings.transformersMtp === option.value ? ' settings-segment-active' : ''}`}
+                    role="radio"
+                    aria-checked={appSettings.transformersMtp === option.value}
+                    onClick={() => { void onUpdateSettings({ transformersMtp: option.value }) }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="settings-menu-note">
+                MTP loads the Gemma assistant drafter model and uses speculative decoding in Transformers.
+              </p>
+            </div>
+          ) : null}
           {isModelRestartRequired ? (
             <div className="settings-restart-panel" role="status">
-              <span>Restart to download and load the selected LiteRT model.</span>
+              <span>Restart to load the selected LiteRT speech settings.</span>
               <div className="settings-restart-actions">
                 <button type="button" className="settings-menu-secondary-button" onClick={onDismissModelRestart}>
                   Later
@@ -2253,6 +3104,48 @@ export function EditorToolbar({
             </div>
           ) : null}
         </section>
+      </div>
+      <div className={`file-menu-drawer help-menu-drawer${isHelpMenuOpen ? ' file-menu-drawer-open' : ''}`} role="dialog" aria-label="Help">
+        <div className="help-menu-toolbar">
+          <label className="help-search-label" htmlFor="help-search-input">Search help</label>
+          <div className="help-search-row">
+            <input
+              id="help-search-input"
+              ref={helpSearchInputRef}
+              className="help-search-input"
+              value={helpSearchQuery}
+              placeholder="Search manual"
+              onChange={(event) => {
+                setHelpSearchQuery(event.target.value)
+                setActiveHelpMatchIndex(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && event.shiftKey) {
+                  event.preventDefault()
+                  goToPreviousHelpMatch()
+                } else if (event.key === 'Enter') {
+                  event.preventDefault()
+                  goToNextHelpMatch()
+                }
+              }}
+            />
+            <span className="help-search-count" aria-live="polite">
+              {helpSearchQuery.trim() ? `${helpMatchCount === 0 ? 0 : activeHelpMatchIndex + 1}/${helpMatchCount}` : '0/0'}
+            </span>
+            <button type="button" className="help-search-button" disabled={helpMatchCount === 0} onClick={goToPreviousHelpMatch} aria-label="Previous help search result">
+              ↑
+            </button>
+            <button type="button" className="help-search-button" disabled={helpMatchCount === 0} onClick={goToNextHelpMatch} aria-label="Next help search result">
+              ↓
+            </button>
+          </div>
+          <button type="button" className="help-download-button" disabled={isManualPdfExporting} onClick={() => { void exportHelpManualPdf() }}>
+            {isManualPdfExporting ? 'Preparing PDF...' : 'Download PDF'}
+          </button>
+        </div>
+        <article ref={helpContentRef} className="help-markdown">
+          {renderedHelpMarkdown}
+        </article>
       </div>
     </header>
   )

@@ -1,11 +1,16 @@
 {
   "name": "eqoustics",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.0-beta.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "dev": "node scripts/run-dev.mjs",
+    "prepare:python": "node scripts/prepare-python-env.mjs",
+    "prepare:python:dev": "node scripts/prepare-python-env.mjs --skip-portable",
+    "build": "npm run build:win",
+    "build:app": "tsc && vite build",
+    "build:win": "npm run build:app && npm run prepare:python && electron-builder --win",
+    "build:all": "npm run build:win",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
@@ -14,6 +19,7 @@
     "@fortawesome/free-regular-svg-icons": "^7.2.0",
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-fontawesome": "^3.3.1",
+    "@ricky0123/vad-web": "^0.0.30",
     "electron-store": "^10.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

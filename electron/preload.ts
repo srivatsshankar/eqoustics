@@ -6,6 +6,8 @@ import type {
   AppSettingsPayload,
   AppSettingsUpdatePayload,
   SpeechAudioChunkPayload,
+  SpeechCommandAliasPayload,
+  SpeechCommandInfo,
   SpeechModelStatusPayload,
   SpeechTranscriptResult,
   WindowControlAction,
@@ -50,6 +52,13 @@ contextBridge.exposeInMainWorld('eqoustics', {
   restartApp: () => ipcRenderer.invoke(IPC_CHANNELS.appRestart) as Promise<void>,
   getSpeechModelStatus: () => ipcRenderer.invoke(IPC_CHANNELS.speechModelGetStatus) as Promise<SpeechModelStatusPayload>,
   loadSpeechModel: () => ipcRenderer.invoke(IPC_CHANNELS.speechModelLoad) as Promise<SpeechModelStatusPayload>,
+  listSpeechCommands: () => ipcRenderer.invoke(IPC_CHANNELS.speechListCommands) as Promise<SpeechCommandInfo[]>,
+  addSpeechCommandAlias: (payload: SpeechCommandAliasPayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.speechAddCommandAlias, payload) as Promise<SpeechCommandInfo[]>
+  },
+  deleteSpeechCommandAlias: (payload: SpeechCommandAliasPayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.speechDeleteCommandAlias, payload) as Promise<SpeechCommandInfo[]>
+  },
   transcribeSpeechChunk: (payload: SpeechAudioChunkPayload) => {
     return ipcRenderer.invoke(IPC_CHANNELS.speechTranscribeChunk, payload) as Promise<SpeechTranscriptResult>
   },

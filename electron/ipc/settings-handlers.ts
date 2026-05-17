@@ -1,16 +1,17 @@
 import { app, ipcMain } from 'electron'
-import os from 'node:os'
 
 import {
   IPC_CHANNELS,
   type AppSettingsPayload,
   type AppSettingsUpdatePayload,
   type AppearancePreference,
+  type SpeechAccelerationBackend,
+  type SpeechInferenceRuntime,
   type SpeechModelSize,
 } from '../../src/shared/ipc/channels'
 
 export const APP_SETTINGS_KEY = 'appSettings'
-const MODEL_MEMORY_THRESHOLD_BYTES = 16 * 1024 * 1024 * 1024
+const APP_SETTINGS_VERSION = 2
 
 type ElectronStoreLike = {
   get: (key: string) => unknown
@@ -18,13 +19,17 @@ type ElectronStoreLike = {
 }
 
 interface StoredAppSettings {
+  version?: number
   microphoneDeviceId?: string | null
   appearance?: AppearancePreference
   speechModelSize?: SpeechModelSize
+  speechAcceleration?: SpeechAccelerationBackend
+  speechInferenceRuntime?: SpeechInferenceRuntime
+  transformersMtp?: boolean
 }
 
-function defaultSpeechModelSize() {
-  return os.totalmem() >= MODEL_MEMORY_THRESHOLD_BYTES ? '4b' : '2b'
+function defaultSpeechModelSize(): SpeechModelSize {
+  return '2b'
 }
 
 function normalizeAppearance(value: unknown): AppearancePreference {
@@ -33,6 +38,34 @@ function normalizeAppearance(value: unknown): AppearancePreference {
 
 function normalizeSpeechModelSize(value: unknown): SpeechModelSize {
   return value === '4b' || value === '2b' ? value : defaultSpeechModelSize()
+}
+
+function defaultSpeechAcceleration(): SpeechAccelerationBackend {
+  try {
+    const gpuStatus = app.getGPUFeatureStatus()
+    const compositingStatus = gpuStatus.gpu_compositing
+    if (
+      compositingStatus === 'disabled_software'
+      || compositingStatus === 'disabled_off'
+      || compositingStatus === 'unavailable_software'
+      || compositingStatus === 'unavailable_off'
+    ) {
+      return 'cpu'
+    }
+  } catch {
+    return 'cpu'
+  }
+
+  return 'gpu'
+}
+
+function normalizeSpeechAcceleration(value: unknown): SpeechAccelerationBackend {
+  if (value === 'cpu' || value === 'gpu') return value
+  return defaultSpeechAcceleration()
+}
+
+function normalizeSpeechInferenceRuntime(value: unknown): SpeechInferenceRuntime {
+  return value === 'transformers' ? 'transformers' : 'litert'
 }
 
 function readStoredSettings(store: ElectronStoreLike): StoredAppSettings {
@@ -49,13 +82,17 @@ export function readAppSettings(store: ElectronStoreLike): AppSettingsPayload {
       : null,
     appearance: normalizeAppearance(stored.appearance),
     speechModelSize: normalizeSpeechModelSize(stored.speechModelSize),
-    totalMemoryBytes: os.totalmem(),
+    speechAcceleration: normalizeSpeechAcceleration(stored.speechAcceleration),
+    speechInferenceRuntime: normalizeSpeechInferenceRuntime(stored.speechInferenceRuntime),
+    transformersMtp: stored.transformersMtp !== false,
+    totalMemoryBytes: 0,
   }
 }
 
 function updateAppSettings(store: ElectronStoreLike, update: AppSettingsUpdatePayload) {
   const current = readAppSettings(store)
   const next: StoredAppSettings = {
+    version: APP_SETTINGS_VERSION,
     microphoneDeviceId: update.microphoneDeviceId === undefined
       ? current.microphoneDeviceId
       : update.microphoneDeviceId || null,
@@ -65,6 +102,15 @@ function updateAppSettings(store: ElectronStoreLike, update: AppSettingsUpdatePa
     speechModelSize: update.speechModelSize === undefined
       ? current.speechModelSize
       : normalizeSpeechModelSize(update.speechModelSize),
+    speechAcceleration: update.speechAcceleration === undefined
+      ? current.speechAcceleration
+      : normalizeSpeechAcceleration(update.speechAcceleration),
+    speechInferenceRuntime: update.speechInferenceRuntime === undefined
+      ? current.speechInferenceRuntime
+      : normalizeSpeechInferenceRuntime(update.speechInferenceRuntime),
+    transformersMtp: update.transformersMtp === undefined
+      ? current.transformersMtp
+      : update.transformersMtp !== false,
   }
 
   store.set(APP_SETTINGS_KEY, next)

@@ -1,23 +1,667 @@
+import fnmatch
+import importlib.util
 import json
+import os
+from pathlib import Path
 import re
+import sqlite3
 import sys
+import threading
+import time
 import traceback
 
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
-PROMPT_TEMPLATE = """
-Transcribe what you hear in the audio into Latex.
-"""
 
-# Current row LaTeX:
-# {current_row_latex}
+DEFAULT_COMMANDS = [
+    {
+        "command": "new-line",
+        "name": "new line",
+        "category": "formatting",
+        "description": "Create a new row below the current row.",
+        "aliases": ["newline", "new row", "next line"],
+    },
+    {
+        "command": "new-paragraph",
+        "name": "new paragraph",
+        "category": "formatting",
+        "description": "Create a blank row after the current row for a new paragraph.",
+        "aliases": ["next paragraph", "new para"],
+    },
+    {
+        "command": "go-to-row",
+        "name": "go to row {number}",
+        "category": "navigation",
+        "description": "Move the cursor to the requested row number.",
+        "aliases": [
+            "go to line {number}",
+            "go row {number}",
+            "go line {number}",
+            "select line {number}",
+            "select row {number}",
+        ],
+    },
+    {
+        "command": "bold-that",
+        "name": "bold that",
+        "category": "formatting",
+        "description": "Apply bold formatting to the last entered text or typed word.",
+        "aliases": ["make that bold"],
+    },
+    {
+        "command": "italic-that",
+        "name": "italic that",
+        "category": "formatting",
+        "description": "Apply italic formatting to the last entered text or typed word.",
+        "aliases": ["italics that", "make that italic", "make that italics"],
+    },
+    {
+        "command": "underline-that",
+        "name": "underline that",
+        "category": "formatting",
+        "description": "Apply underline formatting to the last entered text or typed word.",
+        "aliases": ["underlined that", "make that underlined"],
+    },
+    {
+        "command": "bold-row",
+        "name": "bold row",
+        "category": "formatting",
+        "description": "Apply bold formatting to the entire current row.",
+        "aliases": ["bold line"],
+    },
+    {
+        "command": "italic-row",
+        "name": "italic row",
+        "category": "formatting",
+        "description": "Apply italic formatting to the entire current row.",
+        "aliases": ["italics row", "italic line", "italics line"],
+    },
+    {
+        "command": "underline-row",
+        "name": "underline row",
+        "category": "formatting",
+        "description": "Apply underline formatting to the entire current row.",
+        "aliases": ["underline line", "underlined row", "underlined line"],
+    },
+    {
+        "command": "heading-1",
+        "name": "heading 1",
+        "category": "formatting",
+        "description": "Convert the current row to heading level 1.",
+        "aliases": ["heading one", "heading level 1", "heading level one"],
+    },
+    {
+        "command": "heading-2",
+        "name": "heading 2",
+        "category": "formatting",
+        "description": "Convert the current row to heading level 2.",
+        "aliases": ["heading two", "heading level 2", "heading level two"],
+    },
+    {
+        "command": "heading-3",
+        "name": "heading 3",
+        "category": "formatting",
+        "description": "Convert the current row to heading level 3.",
+        "aliases": ["heading three", "heading level 3", "heading level three"],
+    },
+    {
+        "command": "heading-4",
+        "name": "heading 4",
+        "category": "formatting",
+        "description": "Convert the current row to heading level 4.",
+        "aliases": ["heading four", "heading level 4", "heading level four"],
+    },
+    {
+        "command": "delete-that",
+        "name": "delete that",
+        "category": "formatting",
+        "description": "Delete the last entered text or typed word.",
+        "aliases": ["remove that"],
+    },
+    {
+        "command": "delete-row",
+        "name": "delete row",
+        "category": "formatting",
+        "description": "Delete the entire current row.",
+        "aliases": ["delete line", "remove row", "remove line"],
+    },
+    {
+        "command": "bullet-that",
+        "name": "bullet that",
+        "category": "formatting",
+        "description": "Apply bullet list formatting to the current row.",
+        "aliases": ["bullet row", "bullet line"],
+    },
+    {
+        "command": "number-that",
+        "name": "number that",
+        "category": "formatting",
+        "description": "Apply numbered list formatting to the current row.",
+        "aliases": ["number row", "number line", "numbering that", "numbered list that"],
+    },
+    {
+        "command": "save-document",
+        "name": "save",
+        "category": "navigation",
+        "description": "Save the current document.",
+        "aliases": ["save document"],
+    },
+    {
+        "command": "save-document-as",
+        "name": "save as",
+        "category": "navigation",
+        "description": "Open the save-as prompt for the current document.",
+        "aliases": ["save document as"],
+    },
+    {
+        "command": "open-document",
+        "name": "open document",
+        "category": "navigation",
+        "description": "Open the document picker.",
+        "aliases": ["open file"],
+    },
+    {
+        "command": "undo-that",
+        "name": "undo that",
+        "category": "navigation",
+        "description": "Undo the last action.",
+        "aliases": ["undo"],
+    },
+    {
+        "command": "redo-that",
+        "name": "redo that",
+        "category": "navigation",
+        "description": "Redo the last undone action.",
+        "aliases": ["redo"],
+    },
+    {
+        "command": "type-text",
+        "name": "type {text}",
+        "category": "formatting",
+        "description": "Type the following text verbatim without converting it to LaTeX.",
+        "aliases": [],
+    },
+    {
+        "command": "help-me",
+        "name": "help me",
+        "category": "navigation",
+        "description": "Toggle the help menu.",
+        "aliases": ["open help"],
+    },
+    {
+        "command": "close-help",
+        "name": "close help",
+        "category": "navigation",
+        "description": "Close the help menu.",
+        "aliases": ["hide help"],
+    },
+    {
+        "command": "minimize-window",
+        "name": "minimize window",
+        "category": "navigation",
+        "description": "Minimize the application window.",
+        "aliases": ["minimise window"],
+    },
+    {
+        "command": "maximize-window",
+        "name": "maximize window",
+        "category": "navigation",
+        "description": "Maximize or restore the application window.",
+        "aliases": ["maximise window"],
+    },
+    {
+        "command": "close-window",
+        "name": "close window",
+        "category": "navigation",
+        "description": "Close the application window.",
+        "aliases": [],
+    },
+    {
+        "command": "silence",
+        "name": "silence",
+        "category": "microphone",
+        "description": "Keep the microphone active but ignore speech until the listen command is heard.",
+        "aliases": ["silent"],
+    },
+    {
+        "command": "listen",
+        "name": "listen",
+        "category": "microphone",
+        "description": "Resume processing speech after silence mode.",
+        "aliases": ["start listening"],
+    },
+    {
+        "command": "deactivate-microphone",
+        "name": "deactivate microphone",
+        "category": "microphone",
+        "description": "Turn off speech recognition.",
+        "aliases": ["disable microphone", "turn off microphone", "stop listening"],
+    },
+]
+
+NUMBER_UNITS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+}
+
+NUMBER_TEENS = {
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+}
+
+NUMBER_TENS = {
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
+NUMBER_SCALES = {
+    "thousand": 1_000,
+    "million": 1_000_000,
+}
+
+NUMBER_WORDS = {
+    **NUMBER_UNITS,
+    **NUMBER_TEENS,
+    **NUMBER_TENS,
+}
+
+NUMBER_PHRASE_WORDS = set(NUMBER_WORDS) | {"and", "hundred", *NUMBER_SCALES}
+SPOKEN_ARTICLES = {"a", "an", "the"}
+SPOKEN_MATH_FILLER_WORDS = {"by", "sign", "symbol"}
+
+MATH_PHRASE_OPERATORS = {}
+# MATH_PHRASE_OPERATORS = {
+#     "literal symbol equals": "=",
+#     "literal symbol equal": "=",
+#     "literal equals sign": "=",
+#     "literal equal sign": "=",
+#     "the equals sign": "=",
+#     "the equal sign": "=",
+#     "equals symbol": "=",
+#     "equal symbol": "=",
+#     "equals sign": "=",
+#     "equal sign": "=",
+#     "literal equals": "=",
+#     "literal equal": "=",
+#     "equals": "=",
+#     "equal to": "=",
+#     "equal": "=",
+#     "is equal to": "=",
+#     "is equals to": "=",
+#     "plus": "+",
+#     "minus": "-",
+#     "negative": "-",
+#     "multiply by": "\\times",
+#     "times": "\\times",
+#     "multiplied by": "\\times",
+#     "multiply": "\\times",
+#     "multiplication": "\\times",
+#     "division": "\\div",
+#     "divide by": "\\div",
+#     "divide": "\\div",
+#     "divided by": "\\div",
+#     "over": "/",
+#     "less than": "<",
+#     "greater than": ">",
+# }
+
+
+def build_transcription_prompt():
+    return """
+Transcribe the provided audio exactly.
+Return only the plain transcript text.
+Do not return JSON, Markdown, labels, LaTeX, explanations, apologies, or anything else.
+""".strip()
+
+
+def build_latex_workflow_prompt(transcript):
+    return ("""
+Convert the transcript to an Eqoustics editor action.
+Return exactly:
+ACTION: INSERT|REPLACE_ROW
+LATEX: <raw LaTeX|NO_LATEX>
+END
+
+Rules:
+- This is a math editor. Treat math dictation as LaTeX, not prose.
+- Never return NO_LATEX for variables, numbers with operators, equations, fractions, powers, roots, integrals, sums, matrices, Greek letters, sets, logic, or speech operator phrases.
+- Use REPLACE_ROW for corrections/edits/removals/replacements of the current row. Call get_current_row_latex first, then return the full corrected row.
+- For context-dependent insertions like continue, append, complete, or insert after the current expression, call get_current_row_latex first.
+- For standalone math dictation, do not call tools; convert directly to LaTeX.
+- Mathematical speech returns raw LaTeX only, without $, $$, \\[, \\], \\(, or \\).
+- Preserve spoken relation operators. "equals", "equal to", "equals sign", and "literal symbol equals" must produce = in the matching location.
+- Only plain non-math prose returns LATEX: NO_LATEX. Do not wrap prose in \\text{}.
+- Matrices use standard LaTeX environments, \\\\ row separators, and & cells.
+
+Examples:
+
+Transcript: x squared over 2 minus 3
+ACTION: INSERT
+LATEX: \\frac{x^2}{2} - 3
+END
+
+Transcript: that's the conclusion of the proof
+ACTION: INSERT
+LATEX: NO_LATEX
+END
+
+Transcript: make that a plus instead of minus
+ACTION: REPLACE_ROW
+LATEX: \\frac{x^2}{2} + 3
+END
+
+Transcript: plus 5
+ACTION: INSERT
+LATEX: + 5
+END
+
+Transcript: x equals y
+ACTION: INSERT
+LATEX: x = y
+END
+
+Transcript: x literal symbol equals x
+ACTION: INSERT
+LATEX: x = x
+END
+
+Transcript:
+""" + (transcript or "")).strip()
 
 
 engine = None
+engine_load_command = None
+engine_backend_name = None
+engine_speculative_decoding = None
+engine_runtime = None
+transformers_processor = None
+transformers_assistant_model = None
+transformers_torch = None
+transformers_mtp_enabled = False
+transformers_static_cache_supported = True
+initialized_command_databases = set()
+command_cache = {}
 
 
-def backend_from_name(litert_lm, name):
-    normalized = str(name or "cpu").upper()
-    return getattr(litert_lm.Backend, normalized, litert_lm.Backend.CPU)
+BACKEND_PREFERENCE_ORDER = {
+    "auto": ["gpu", "cpu"],
+    "gpu": ["gpu", "cpu"],
+    "cpu": ["cpu"],
+    "npu": ["npu", "gpu", "cpu"],
+}
+
+
+def backend_candidates_from_name(litert_lm, name):
+    requested = str(name or os.environ.get("EQOUSTICS_LITERT_BACKEND") or "auto").strip().lower()
+    ordered_names = BACKEND_PREFERENCE_ORDER.get(requested, [requested, "cpu"])
+
+    candidates = []
+    seen = set()
+    for backend_token in ordered_names:
+        backend = getattr(litert_lm.Backend, backend_token.upper(), None)
+        if backend is None or backend in seen:
+            continue
+        candidates.append(backend)
+        seen.add(backend)
+
+    if not candidates:
+        candidates.append(litert_lm.Backend.CPU)
+    return candidates
+
+
+def import_litert_lm():
+    try:
+        import litert_lm
+        return litert_lm
+    except ModuleNotFoundError as exc:
+        if exc.name in {"litert_lm", "lite_rt"}:
+            raise RuntimeError(
+                "LiteRT-LM Python dependency is missing or incomplete. "
+                "On Ubuntu, run: python3 -m pip install --upgrade --force-reinstall 'litert-lm-api>=0.11.0'. "
+                "If Eqoustics is using a different Python, set EQOUSTICS_PYTHON to that Python executable."
+            ) from exc
+        raise
+
+
+def import_transformers_runtime():
+    try:
+        import PIL
+        import librosa
+        import torch
+        import torchvision
+        from transformers import AutoModelForCausalLM, AutoModelForMultimodalLM, AutoProcessor
+        return torch, AutoProcessor, AutoModelForMultimodalLM, AutoModelForCausalLM
+    except ModuleNotFoundError as exc:
+        if exc.name in {"PIL", "librosa", "torch", "torchvision", "transformers", "accelerate"}:
+            raise RuntimeError(
+                "Transformers speech runtime dependencies are missing. "
+                "Install them with: python -m pip install --upgrade torch torchvision accelerate transformers pillow librosa. "
+                "If Eqoustics is using a different Python, set EQOUSTICS_PYTHON to that Python executable."
+            ) from exc
+        raise
+
+
+TRANSFORMERS_ARTIFACT_PATTERNS = [
+    "*.json",
+    "*.txt",
+    "*.jinja",
+    "*.model",
+    "*.tiktoken",
+    "*.safetensors",
+    "*.safetensors.index.json",
+    "*.bin",
+    "*.bin.index.json",
+]
+
+
+def matches_any_pattern(name, patterns):
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
+def directory_bytes(path):
+    total = 0
+    if not path or not os.path.isdir(path):
+        return total
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            entry = os.path.join(root, name)
+            try:
+                stat_result = os.lstat(entry)
+            except OSError:
+                continue
+            # Skip symlinks so HF's snapshots/ pointers don't double-count blob bytes.
+            if hasattr(stat_result, "st_mode") and (stat_result.st_mode & 0o170000) == 0o120000:
+                continue
+            total += stat_result.st_size
+    return total
+
+
+def repo_cache_directory(cache_dir, model_id):
+    return os.path.join(cache_dir, f"models--{model_id.replace('/', '--')}")
+
+
+def filtered_model_total_bytes(model_id, allow_patterns):
+    from huggingface_hub import HfApi
+
+    info = HfApi().model_info(model_id, files_metadata=True)
+    total = 0
+    for sibling in info.siblings or []:
+        if not matches_any_pattern(sibling.rfilename, allow_patterns):
+            continue
+        if sibling.size:
+            total += sibling.size
+    return total
+
+
+def download_transformers_snapshots(model_ids, cache_dir, emit_progress):
+    """Resolve and pre-download HF snapshots for the given models, emitting cumulative byte progress.
+
+    Falls back to letting `from_pretrained` handle the download if model_info or snapshot_download fails.
+    """
+    if not cache_dir or not model_ids:
+        return
+
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception:
+        return
+
+    os.makedirs(cache_dir, exist_ok=True)
+    allow_patterns = TRANSFORMERS_ARTIFACT_PATTERNS
+
+    plan = []
+    grand_total = 0
+    for model_id in model_ids:
+        try:
+            model_total = filtered_model_total_bytes(model_id, allow_patterns)
+        except Exception:
+            # If we cannot resolve the size up front, fall back to letting from_pretrained handle it.
+            return
+        plan.append((model_id, model_total, repo_cache_directory(cache_dir, model_id)))
+        grand_total += model_total
+
+    if grand_total <= 0:
+        return
+
+    if emit_progress:
+        cached_total = sum(min(directory_bytes(model_dir), model_total) for _id, model_total, model_dir in plan)
+        emit_progress({"stage": "downloading", "loadedBytes": cached_total, "totalBytes": grand_total})
+
+    completed_bytes = 0
+    for model_id, model_total, model_dir in plan:
+        outcome = {"error": None}
+
+        def run_download(model_id=model_id):
+            try:
+                snapshot_download(
+                    repo_id=model_id,
+                    cache_dir=cache_dir,
+                    allow_patterns=allow_patterns,
+                )
+            except Exception as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=run_download, name=f"hf-download:{model_id}", daemon=True)
+        thread.start()
+        while thread.is_alive():
+            if emit_progress:
+                current = directory_bytes(model_dir)
+                emit_progress({
+                    "stage": "downloading",
+                    "loadedBytes": completed_bytes + min(current, model_total),
+                    "totalBytes": grand_total,
+                })
+            thread.join(timeout=1.0)
+
+        if outcome["error"] is not None:
+            raise outcome["error"]
+
+        completed_bytes += model_total
+        if emit_progress:
+            emit_progress({
+                "stage": "downloading",
+                "loadedBytes": completed_bytes,
+                "totalBytes": grand_total,
+            })
+
+    if emit_progress:
+        emit_progress({"stage": "initializing"})
+
+
+def backend_name(value):
+    return str(value).split(".")[-1].lower()
+
+
+def normalize_runtime(value):
+    return "transformers" if str(value or "").strip().lower() == "transformers" else "litert"
+
+
+def speech_timing_enabled():
+    return os.environ.get("EQOUSTICS_SPEECH_TIMING") == "1"
+
+
+def log_timing(label, started_at, **details):
+    if not speech_timing_enabled():
+        return
+
+    detail_text = "".join(f" {key}={value}" for key, value in details.items() if value is not None)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    print(f"[speech timing] {label}: {elapsed_ms:.1f}ms{detail_text}", file=sys.stderr, flush=True)
+
+
+def normalize_speculative_override(value):
+    normalized = str(value or "auto").strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return "true"
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return "false"
+    return "auto"
+
+
+def model_size_from_command(command):
+    model_size = str(command.get("modelSize") or "").strip().lower()
+    if model_size in {"2b", "4b"}:
+        return model_size
+
+    model_id = str(command.get("modelId") or "").strip().lower()
+    if "e4b" in model_id or "4b" in model_id:
+        return "4b"
+    if "e2b" in model_id or "2b" in model_id:
+        return "2b"
+    return None
+
+
+def speculative_modes_for_backend(backend, command):
+    override = normalize_speculative_override(
+        command.get("speculativeDecoding") or os.environ.get("EQOUSTICS_LITERT_SPECULATIVE_DECODING")
+    )
+    if override == "false":
+        return ["disabled"]
+    if override == "true":
+        return ["enabled", "default"]
+
+    backend = backend_name(backend)
+    if backend == "cpu" and model_size_from_command(command) in {"2b", "4b"}:
+        return ["enabled", "default"]
+    return ["default"]
+
+
+def apply_speculative_mode(kwargs, mode):
+    if mode == "enabled":
+        kwargs["enable_speculative_decoding"] = True
+    elif mode == "disabled":
+        kwargs["enable_speculative_decoding"] = False
+
+
+def parse_positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def clean_text(value):
@@ -25,6 +669,123 @@ def clean_text(value):
     value = value.replace("```latex", "").replace("```", "")
     value = re.sub(r"\s+", " ", value)
     return value.strip().strip('"')
+
+
+def restore_json_decoded_latex_escapes(value):
+    replacements = {
+        "\b": "\\b",
+        "\f": "\\f",
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+    }
+    chars = []
+    for index, char in enumerate(value or ""):
+        if char in replacements and index + 1 < len(value) and re.match(r"[A-Za-z]", value[index + 1]):
+            chars.append(replacements[char])
+        else:
+            chars.append(char)
+    return "".join(chars)
+
+
+def normalize_latex_fraction_shorthand(value):
+    value = re.sub(r"(\\(?:dfrac|tfrac|frac))\s*([A-Za-z0-9])\s*\{([^{}]*)\}", r"\1{\2}{\3}", value)
+    value = re.sub(r"(\\(?:dfrac|tfrac|frac))\s*\{([^{}]*)\}\s*([A-Za-z0-9])", r"\1{\2}{\3}", value)
+    return re.sub(r"(\\(?:dfrac|tfrac|frac))\s*([A-Za-z0-9])\s*([A-Za-z0-9])", r"\1{\2}{\3}", value)
+
+
+def normalize_latex_for_editor(value):
+    value = normalize_latex_fraction_shorthand(value)
+    value = re.sub(r"\s*\\\\\s*$", "", value).strip()
+    value = re.sub(r"\s*\\\s*$", "", value).strip()
+
+    wrappers = [
+        ("$$", "$$"),
+        ("\\[", "\\]"),
+        ("\\(", "\\)"),
+        ("$", "$"),
+    ]
+    changed = True
+    while changed:
+        changed = False
+        stripped = value.strip()
+        for left, right in wrappers:
+            if stripped.startswith(left) and stripped.endswith(right) and len(stripped) >= len(left) + len(right):
+                value = stripped[len(left):len(stripped) - len(right)].strip()
+                value = re.sub(r"\s*\\\\\s*$", "", value).strip()
+                value = re.sub(r"\s*\\\s*$", "", value).strip()
+                changed = True
+                break
+
+    return value
+
+
+def is_explanatory_or_apology(value):
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    if not normalized:
+        return False
+
+    apology_prefixes = (
+        "i'm sorry",
+        "i am sorry",
+        "sorry",
+        "i apologize",
+        "as an ai",
+        "i can't",
+        "i cannot",
+        "i'm unable",
+        "i am unable",
+    )
+    explanation_markers = (
+        "cannot convert",
+        "can't convert",
+        "not able to convert",
+        "unable to convert",
+        "no latex",
+        "not latex",
+    )
+    return normalized.startswith(apology_prefixes) or any(marker in normalized for marker in explanation_markers)
+
+
+def looks_like_latex_or_math_source(value):
+    stripped = str(value or "").strip()
+    if not stripped:
+        return False
+    if "\\" in stripped:
+        return True
+    if re.search(r"[=+\-*/^_<>]|[{}\[\]&]", stripped):
+        return True
+    if re.search(r"\d", stripped) and re.search(r"[A-Za-z]", stripped):
+        return True
+    if re.fullmatch(r"[A-Za-z]", stripped):
+        return True
+    return False
+
+
+def clean_raw_latex_result(value, require_math=False):
+    value = (value or "").strip()
+    value = re.sub(r"^```(?:latex|tex)?\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*```$", "", value)
+    value = value.strip().strip('"')
+
+    if not value:
+        return None
+    if value.strip().lower() in {"no_latex", "null", "none"}:
+        return None
+    if is_explanatory_or_apology(value):
+        return None
+
+    value = normalize_latex_for_editor(value)
+    if require_math and not looks_like_latex_or_math_source(value):
+        return None
+    return value
+
+
+def normalize_workflow_action(value):
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    if normalized in {"replace-row", "replace", "correct", "correction", "edit", "fix"}:
+        return "replace-row"
+    return "insert"
 
 
 def response_text(response):
@@ -44,58 +805,1376 @@ def response_text(response):
     return str(response)
 
 
-def load_model(command):
-    global engine
+def workflow_has_end_marker(text):
+    return re.search(r"(?im)^END\s*:?\s*$", text or "") is not None
 
-    import litert_lm
+
+def trim_after_workflow_end(text):
+    match = re.search(r"(?im)^END\s*:?\s*$", text or "")
+    if not match:
+        return text
+    return text[:match.end()]
+
+
+def stream_response_text_until_end(conversation, message):
+    chunks = []
+    stream = conversation.send_message_async(message)
+    try:
+        for chunk in stream:
+            text = response_text(chunk)
+            if not text:
+                continue
+
+            chunks.append(text)
+            combined = "".join(chunks)
+            if not workflow_has_end_marker(combined):
+                continue
+
+            try:
+                conversation.cancel_process()
+            except Exception:
+                pass
+            return trim_after_workflow_end(combined)
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    return "".join(chunks)
+
+
+def send_latex_workflow_message(message, current_row_latex=None):
+    current_row_latex = (current_row_latex or "").strip() or "(empty)"
+
+    def get_current_row_latex():
+        """Return the current editor row LaTeX when the transcript needs row context."""
+        return current_row_latex
+
+    try:
+        with engine.create_conversation(
+            tools=[get_current_row_latex],
+            automatic_tool_calling=True,
+        ) as conversation:
+            streamed_text = stream_response_text_until_end(conversation, message)
+            if streamed_text:
+                return streamed_text
+    except Exception as exc:
+        if speech_timing_enabled():
+            print(f"[speech timing] latex-stream-fallback error={exc}", file=sys.stderr, flush=True)
+
+    with engine.create_conversation(automatic_tool_calling=False) as conversation:
+        return response_text(conversation.send_message(message))
+
+
+def parse_json_response(text):
+    stripped = (text or "").strip()
+    stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped)
+
+    try:
+        return json.loads(stripped)
+    except Exception:
+        pass
+
+    match = re.search(r"\{[\s\S]*\}", stripped)
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(0))
+    except Exception:
+        return None
+
+
+def relaxed_json_string_field(text, field_name):
+    stripped = (text or "").strip()
+    stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped)
+
+    match = re.search(rf'"{re.escape(field_name)}"\s*:\s*"', stripped)
+    if not match:
+        return None
+
+    chars = []
+    index = match.end()
+    while index < len(stripped):
+        char = stripped[index]
+        if char == '"':
+            return "".join(chars)
+        if char == "\\" and index + 1 < len(stripped):
+            next_char = stripped[index + 1]
+            if next_char in ['"', "\\"]:
+                chars.append(next_char)
+            else:
+                chars.append("\\")
+                chars.append(next_char)
+            index += 2
+            continue
+        chars.append(char)
+        index += 1
+
+    return None
+
+
+def command_database_path(command):
+    return command.get("commandDbPath") or os.path.join(os.path.dirname(__file__), "speech_commands.sqlite")
+
+
+def ensure_command_database(db_path):
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS commands (
+                internal_command TEXT PRIMARY KEY,
+                command_name TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'formatting',
+                description TEXT NOT NULL,
+                sort_order INTEGER NOT NULL
+            )
+        """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS command_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                internal_command TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                is_user_defined INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(internal_command, alias),
+                FOREIGN KEY(internal_command) REFERENCES commands(internal_command) ON DELETE CASCADE
+            )
+        """)
+        alias_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(command_aliases)").fetchall()
+        }
+        if "is_user_defined" not in alias_columns:
+            connection.execute(
+                "ALTER TABLE command_aliases ADD COLUMN is_user_defined INTEGER NOT NULL DEFAULT 0"
+            )
+        command_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(commands)").fetchall()
+        }
+        if "category" not in command_columns:
+            connection.execute(
+                "ALTER TABLE commands ADD COLUMN category TEXT NOT NULL DEFAULT 'formatting'"
+            )
+        for index, command in enumerate(DEFAULT_COMMANDS):
+            connection.execute(
+                """
+                INSERT INTO commands (internal_command, command_name, category, description, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(internal_command) DO UPDATE SET
+                    command_name = excluded.command_name,
+                    category = excluded.category,
+                    description = excluded.description,
+                    sort_order = excluded.sort_order
+                """,
+                (command["command"], command["name"], command["category"], command["description"], index),
+            )
+            connection.execute(
+                "DELETE FROM command_aliases WHERE internal_command = ? AND is_user_defined = 0",
+                (command["command"],),
+            )
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO command_aliases (internal_command, alias, is_user_defined)
+                VALUES (?, ?, 0)
+                """,
+                [(command["command"], alias) for alias in command["aliases"]],
+            )
+
+
+def command_database_metadata(db_path):
+    try:
+        stats = os.stat(db_path)
+    except OSError:
+        return None
+    return (stats.st_mtime_ns, stats.st_size)
+
+
+def ensure_command_database_once(db_path):
+    if db_path in initialized_command_databases and os.path.exists(db_path):
+        return
+
+    ensure_command_database(db_path)
+    initialized_command_databases.add(db_path)
+
+
+def read_commands_from_database(db_path):
+    ensure_command_database_once(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT internal_command, command_name, category, description FROM commands ORDER BY sort_order, command_name"
+        ).fetchall()
+        alias_rows = connection.execute(
+            "SELECT internal_command, alias, is_user_defined FROM command_aliases ORDER BY is_user_defined, alias"
+        ).fetchall()
+
+    aliases_by_command = {}
+    user_aliases_by_command = {}
+    for row in alias_rows:
+        aliases_by_command.setdefault(row["internal_command"], []).append(row["alias"])
+        if row["is_user_defined"]:
+            user_aliases_by_command.setdefault(row["internal_command"], []).append(row["alias"])
+
+    return [
+        {
+            "command": row["internal_command"],
+            "name": row["command_name"],
+            "category": row["category"],
+            "description": row["description"],
+            "aliases": aliases_by_command.get(row["internal_command"], []),
+            "userAliases": user_aliases_by_command.get(row["internal_command"], []),
+            "canCreateAliases": not command_has_variables(
+                row["command_name"],
+                aliases_by_command.get(row["internal_command"], []),
+            ),
+        }
+        for row in rows
+    ]
+
+
+def cached_commands(db_path):
+    ensure_command_database_once(db_path)
+    metadata = command_database_metadata(db_path)
+    cached = command_cache.get(db_path)
+    if cached and cached["metadata"] == metadata:
+        return cached["commands"]
+
+    commands = read_commands_from_database(db_path)
+    command_cache[db_path] = {
+        "metadata": command_database_metadata(db_path),
+        "commands": commands,
+    }
+    return commands
+
+
+def list_commands(command):
+    return cached_commands(command_database_path(command))
+
+
+def command_has_variables(command_name, aliases=None):
+    values = [command_name, *(aliases or [])]
+    return any(re.search(r"\{[^{}]+\}", str(value or "")) for value in values)
+
+
+def clean_user_alias(value):
+    alias = normalize_phrase(value)
+    if not alias:
+        raise ValueError("Alias cannot be empty.")
+    if len(alias) > 80:
+        raise ValueError("Alias must be 80 characters or fewer.")
+    if "{" in str(value or "") or "}" in str(value or ""):
+        raise ValueError("Aliases cannot contain variables.")
+    return alias
+
+
+def add_command_alias(command):
+    db_path = command_database_path(command)
+    ensure_command_database_once(db_path)
+    internal_command = str(command.get("command") or "").strip()
+    alias = clean_user_alias(command.get("alias"))
+
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        command_row = connection.execute(
+            "SELECT internal_command, command_name FROM commands WHERE internal_command = ?",
+            (internal_command,),
+        ).fetchone()
+        if command_row is None:
+            raise ValueError("Unknown speech command.")
+
+        alias_rows = connection.execute(
+            "SELECT internal_command, alias FROM command_aliases ORDER BY is_user_defined, alias"
+        ).fetchall()
+        aliases_for_command = [
+            row["alias"] for row in alias_rows if row["internal_command"] == internal_command
+        ]
+        if command_has_variables(command_row["command_name"], aliases_for_command):
+            raise ValueError("Aliases can only be created for commands without variables.")
+
+        command_name_matches_alias = normalize_phrase(command_row["command_name"]) == alias
+        alias_matches_same_command = any(
+            row["internal_command"] == internal_command and normalize_phrase(row["alias"]) == alias
+            for row in alias_rows
+        )
+        if not command_name_matches_alias and not alias_matches_same_command:
+            command_rows = connection.execute("SELECT internal_command, command_name FROM commands").fetchall()
+            for row in command_rows:
+                if normalize_phrase(row["command_name"]) == alias:
+                    raise ValueError("That alias is already used by another command.")
+            for row in alias_rows:
+                if normalize_phrase(row["alias"]) == alias:
+                    raise ValueError("That alias is already used by another command.")
+
+            connection.execute(
+                """
+                INSERT INTO command_aliases (internal_command, alias, is_user_defined)
+                VALUES (?, ?, 1)
+                """,
+                (internal_command, alias),
+            )
+
+    command_cache.pop(db_path, None)
+    return list_commands(command)
+
+
+def delete_command_alias(command):
+    db_path = command_database_path(command)
+    ensure_command_database_once(db_path)
+    internal_command = str(command.get("command") or "").strip()
+    alias = clean_user_alias(command.get("alias"))
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            DELETE FROM command_aliases
+            WHERE internal_command = ? AND alias = ? AND is_user_defined = 1
+            """,
+            (internal_command, alias),
+        )
+
+    command_cache.pop(db_path, None)
+    return list_commands(command)
+
+
+def normalize_phrase(value):
+    value = re.sub(r"\{number\}", " __number__ ", str(value or "").lower())
+    value = re.sub(r"[^a-z0-9_\s]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def parse_under_hundred_number(words):
+    if not words:
+        return None
+    if len(words) == 1:
+        word = words[0]
+        if word in NUMBER_UNITS:
+            return NUMBER_UNITS[word]
+        if word in NUMBER_TEENS:
+            return NUMBER_TEENS[word]
+        if word in NUMBER_TENS:
+            return NUMBER_TENS[word]
+        return None
+    if len(words) == 2 and words[0] in NUMBER_TENS and words[1] in NUMBER_UNITS and NUMBER_UNITS[words[1]] > 0:
+        return NUMBER_TENS[words[0]] + NUMBER_UNITS[words[1]]
+    return None
+
+
+def parse_under_thousand_number(words):
+    words = [word for word in words if word != "and"]
+    if not words:
+        return None
+
+    if "hundred" not in words:
+        return parse_under_hundred_number(words)
+
+    hundred_index = words.index("hundred")
+    if hundred_index != 1 or words[0] not in NUMBER_UNITS or NUMBER_UNITS[words[0]] == 0:
+        return None
+
+    rest = words[hundred_index + 1:]
+    rest_value = parse_under_hundred_number(rest) if rest else 0
+    if rest_value is None:
+        return None
+    return NUMBER_UNITS[words[0]] * 100 + rest_value
+
+
+def number_from_text(value):
+    value = str(value or "").lower().strip()
+    if value.isdigit():
+        return int(value)
+
+    words = normalize_phrase(value).split()
+    if not words:
+        return None
+
+    total = 0
+    remaining = words
+    for scale_word, scale in sorted(NUMBER_SCALES.items(), key=lambda item: item[1], reverse=True):
+        if scale_word not in remaining:
+            continue
+
+        scale_index = remaining.index(scale_word)
+        scale_value = parse_under_thousand_number(remaining[:scale_index])
+        if scale_value is None or scale_value == 0:
+            return None
+
+        total += scale_value * scale
+        remaining = remaining[scale_index + 1:]
+
+    rest_value = parse_under_thousand_number(remaining) if remaining else 0
+    if rest_value is None:
+        return None
+    return total + rest_value
+
+
+def replace_spoken_numbers(value):
+    text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", str(value or "").lower())
+    tokens = re.findall(r"\\[a-z]+|[a-z0-9_]+|[^\w\s]", text)
+    if not tokens:
+        return ""
+
+    converted = []
+    index = 0
+    while index < len(tokens):
+        if tokens[index] not in NUMBER_PHRASE_WORDS:
+            converted.append(tokens[index])
+            index += 1
+            continue
+
+        best_value = None
+        best_end = index
+        for end in range(index + 1, len(tokens) + 1):
+            phrase_tokens = tokens[index:end]
+            if any(token not in NUMBER_PHRASE_WORDS for token in phrase_tokens):
+                break
+
+            number = number_from_text(" ".join(phrase_tokens))
+            if number is not None:
+                best_value = number
+                best_end = end
+
+        if best_value is None:
+            converted.append(tokens[index])
+            index += 1
+            continue
+
+        converted.append(str(best_value))
+        index = best_end
+
+    return " ".join(converted)
+
+
+def sorted_math_phrase_operators():
+    return sorted(MATH_PHRASE_OPERATORS.items(), key=lambda item: len(item[0]), reverse=True)
+
+
+def replace_spoken_operator_phrases(value):
+    text = normalize_phrase(value)
+    if not text:
+        return ""
+
+    for phrase, operator in sorted_math_phrase_operators():
+        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
+        text = re.sub(rf"(?<!\S){escaped_phrase}(?!\S)", lambda _match: f" {operator} ", text)
+
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def spoken_math_words_to_latex(value):
+    text = replace_spoken_operator_phrases(value)
+    if not text:
+        return ""
+
+    text = re.sub(r"\b([a-z])\s+squared\b", r"\1^2", text)
+    text = re.sub(r"\b([a-z])\s+cubed\b", r"\1^3", text)
+    return replace_spoken_numbers(text)
+
+
+def simple_math_phrase_to_latex(transcript):
+    normalized = re.sub(r"\s+", " ", str(transcript or "").strip().lower())
+    if not normalized:
+        return None
+
+    for phrase, operator in sorted_math_phrase_operators():
+        if normalized == phrase:
+            return operator
+        if normalized.startswith(f"{phrase} "):
+            rest = spoken_math_words_to_latex(str(transcript or "").strip()[len(phrase):].strip())
+            return f"{operator} {rest}" if rest else operator
+
+    latex = spoken_math_words_to_latex(transcript)
+    if latex != normalize_phrase(transcript) and looks_like_latex_or_math_source(latex):
+        return latex
+
+    return None
+
+
+def meaningful_spoken_math_words(value):
+    return [
+        word for word in normalize_phrase(value).split()
+        if word not in SPOKEN_ARTICLES and word not in SPOKEN_MATH_FILLER_WORDS
+    ]
+
+
+def transcript_is_only_spoken_operator(transcript, operator):
+    normalized = " ".join(meaningful_spoken_math_words(transcript))
+    if not normalized:
+        return False
+
+    for phrase, phrase_operator in sorted_math_phrase_operators():
+        if phrase_operator == operator and normalized == normalize_phrase(phrase):
+            return True
+    return False
+
+
+def spoken_operator_requirements(transcript):
+    normalized = normalize_phrase(transcript)
+    requirements = []
+    for phrase, operator in sorted_math_phrase_operators():
+        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
+        if re.search(rf"(?<!\S){escaped_phrase}(?!\S)", normalized) and operator not in requirements:
+            requirements.append(operator)
+    return requirements
+
+
+def split_spoken_operator(transcript, operator):
+    normalized = normalize_phrase(transcript)
+    for phrase, phrase_operator in sorted_math_phrase_operators():
+        if phrase_operator != operator:
+            continue
+
+        escaped_phrase = re.escape(normalize_phrase(phrase)).replace("\\ ", r"\s+")
+        match = re.search(rf"(?<!\S){escaped_phrase}(?!\S)", normalized)
+        if match:
+            return normalized[:match.start()].strip(), normalized[match.end():].strip()
+
+    return None, None
+
+
+def first_spoken_latex_candidates(spoken_text):
+    words = meaningful_spoken_math_words(spoken_text)
+    if not words:
+        return []
+
+    candidates = []
+    first = words[0]
+    if first.isdigit():
+        base = first
+    elif first in NUMBER_PHRASE_WORDS:
+        base = None
+        for end in range(1, len(words) + 1):
+            if any(word not in NUMBER_PHRASE_WORDS for word in words[:end]):
+                break
+            number = number_from_text(" ".join(words[:end]))
+            if number is not None:
+                base = str(number)
+    elif len(first) == 1 and first.isalpha():
+        base = first
+    else:
+        base = None
+
+    if base:
+        if len(words) > 1 and words[1] == "squared":
+            candidates.extend([f"{base}^2", f"{base}^{{2}}"])
+        elif len(words) > 1 and words[1] == "cubed":
+            candidates.extend([f"{base}^3", f"{base}^{{3}}"])
+        candidates.append(base)
+
+    converted = spoken_math_words_to_latex(" ".join(words))
+    if converted:
+        first_term = re.split(r"\s*(?:=|\+|-|\\times|\\div|/|<|>)\s*", converted, maxsplit=1)[0].strip()
+        if first_term:
+            candidates.insert(0, first_term)
+
+    unique_candidates = []
+    for candidate in candidates:
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def latex_spacing_pattern(value):
+    return r"\s*".join(re.escape(part) for part in re.split(r"\s+", value.strip()) if part)
+
+
+def latex_power_brace_variants(value):
+    variants = [value]
+    braced = re.sub(r"([A-Za-z0-9])\^([0-9])", r"\1^{\2}", value)
+    if braced != value:
+        variants.append(braced)
+    return variants
+
+
+def spoken_latex_prefix_candidates(spoken_text):
+    converted = spoken_math_words_to_latex(spoken_text)
+    if not converted:
+        return []
+
+    candidates = []
+    for variant in latex_power_brace_variants(converted):
+        candidates.append(variant)
+        compact = re.sub(r"\s+", "", variant)
+        if compact != variant:
+            candidates.append(compact)
+
+    unique_candidates = []
+    for candidate in sorted(candidates, key=len, reverse=True):
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def insertion_index_after_left_spoken(latex, left_spoken):
+    for candidate in spoken_latex_prefix_candidates(left_spoken):
+        match = re.match(latex_spacing_pattern(candidate), latex)
+        if not match:
+            continue
+        if match.end() > 0 and latex[match.end():].strip():
+            return match.end()
+
+    return None
+
+
+def is_safe_latex_candidate_match(latex, match):
+    before = latex[match.start() - 1] if match.start() > 0 else ""
+    after = latex[match.end()] if match.end() < len(latex) else ""
+    if before == "\\" or before.isalpha() or after.isalpha():
+        return False
+    return True
+
+
+def insert_missing_operator_before_rhs(latex, transcript, operator):
+    left_spoken, right_spoken = split_spoken_operator(transcript, operator)
+    if right_spoken is None:
+        return None
+    if not left_spoken:
+        return f"{operator} {latex.lstrip()}"
+
+    left_index = insertion_index_after_left_spoken(latex, left_spoken)
+    if left_index is not None:
+        return f"{latex[:left_index].rstrip()} {operator} {latex[left_index:].lstrip()}"
+
+    for candidate in first_spoken_latex_candidates(right_spoken):
+        matches = [match for match in re.finditer(re.escape(candidate), latex)]
+        for match in matches:
+            if match.start() == 0:
+                continue
+            if not is_safe_latex_candidate_match(latex, match):
+                continue
+            return f"{latex[:match.start()].rstrip()} {operator} {latex[match.start():].lstrip()}"
+
+    return None
+
+
+def latex_rhs_matches_spoken(rhs, right_spoken):
+    for candidate in first_spoken_latex_candidates(right_spoken):
+        if re.match(latex_spacing_pattern(candidate), rhs.lstrip()):
+            return True
+    return False
+
+
+def repair_existing_operator_position(latex, transcript, operator):
+    left_spoken, right_spoken = split_spoken_operator(transcript, operator)
+    if not left_spoken or not right_spoken or operator not in latex:
+        return latex
+
+    without_operator = re.sub(rf"\s*{re.escape(operator)}\s*", " ", latex, count=1)
+    left_index = insertion_index_after_left_spoken(without_operator, left_spoken)
+    if left_index is None:
+        return latex
+
+    repaired = f"{without_operator[:left_index].rstrip()} {operator} {without_operator[left_index:].lstrip()}"
+    if latex_rhs_matches_spoken(repaired.split(operator, 1)[1], right_spoken):
+        return repaired
+    return latex
+
+
+def remove_unspoken_repeated_rhs(latex, transcript):
+    if "=" not in latex:
+        return latex
+
+    _left_spoken, right_spoken = split_spoken_operator(transcript, "=")
+    if not right_spoken:
+        return latex
+
+    right_words = normalize_phrase(right_spoken).split()
+    for candidate in first_spoken_latex_candidates(right_spoken):
+        if not candidate or right_words.count(right_words[0]) > 1:
+            continue
+
+        escaped_candidate = re.escape(candidate)
+        latex = re.sub(rf"(=\s*)({escaped_candidate})(\s+)\2(?![A-Za-z0-9])", r"\1\2", latex)
+    return latex
+
+
+def repair_latex_with_spoken_operators(transcript, latex):
+    if not latex:
+        return latex
+
+    for operator in spoken_operator_requirements(transcript):
+        if transcript_is_only_spoken_operator(transcript, operator):
+            return operator
+        if operator in latex:
+            latex = repair_existing_operator_position(latex, transcript, operator)
+            continue
+
+        repaired = insert_missing_operator_before_rhs(latex, transcript, operator)
+        if repaired:
+            latex = repaired
+            continue
+
+        fallback = simple_math_phrase_to_latex(transcript)
+        if fallback and operator in fallback:
+            latex = fallback
+
+    return remove_unspoken_repeated_rhs(latex, transcript)
+
+
+def phrase_match(pattern, transcript):
+    normalized_pattern = normalize_phrase(pattern)
+    normalized_transcript = normalize_phrase(transcript)
+
+    text_variable_match = re.fullmatch(r"(.+?)\s+\{(?:any\s+)?text\}", str(pattern or "").strip(), re.IGNORECASE)
+    if text_variable_match:
+        prefix = text_variable_match.group(1).strip()
+        normalized_prefix = normalize_phrase(prefix)
+        if not normalized_prefix or normalized_transcript == normalized_prefix:
+            return None
+        if not normalized_transcript.startswith(f"{normalized_prefix} "):
+            return None
+
+        prefix_pattern = r"^\s*" + r"\s+".join(re.escape(part) for part in prefix.split()) + r"\s+(.+?)\s*$"
+        original_match = re.match(prefix_pattern, str(transcript or ""), re.IGNORECASE)
+        if original_match:
+            text = original_match.group(1).strip()
+        else:
+            text = normalized_transcript[len(normalized_prefix):].strip()
+        return {"text": text} if text else None
+
+    if "__number__" not in normalized_pattern:
+        return {} if normalized_pattern == normalized_transcript else None
+
+    escaped = re.escape(normalized_pattern).replace("__number__", r"(?P<number>[a-z0-9\s]+)")
+    match = re.fullmatch(escaped, normalized_transcript)
+    if not match:
+        return None
+
+    row_number = number_from_text(match.group("number"))
+    if not row_number or row_number < 1:
+        return None
+    return {"rowNumber": row_number}
+
+
+def lookup_command_action(transcript, db_path):
+    for command in cached_commands(db_path):
+        for phrase in [command["name"], *command["aliases"]]:
+            match = phrase_match(phrase, transcript)
+            if match is None:
+                continue
+
+            if command["command"] == "type-text":
+                text = match.get("text", "")
+                return {"type": "insert", "insertMode": "text", "text": text}
+
+            action = {"type": "command", "command": command["command"]}
+            action.update(match)
+            return action
+
+    return None
+
+
+def workflow_sections(text):
+    sections = {}
+    current_key = None
+    current_lines = []
+    marker_pattern = re.compile(r"^(TRANSCRIPT|ACTION|LATEX|END)\s*:?\s*(.*)$", re.IGNORECASE)
+
+    def commit():
+        if current_key:
+            sections[current_key] = "\n".join(current_lines).strip()
+
+    for line in (text or "").splitlines():
+        match = marker_pattern.match(line.strip())
+        if match:
+            marker = match.group(1).upper()
+            if marker == "END":
+                commit()
+                current_key = None
+                current_lines = []
+                break
+
+            commit()
+            current_key = marker
+            current_lines = [match.group(2)] if match.group(2) else []
+            continue
+
+        if current_key:
+            current_lines.append(line)
+
+    commit()
+    return sections
+
+
+def normalize_transcription_result(raw_text):
+    text = (raw_text or "").strip()
+    text = re.sub(r"^```(?:text|plaintext)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+
+    parsed = parse_json_response(text)
+    if isinstance(parsed, dict):
+        return clean_text(parsed.get("transcript") or parsed.get("verbatimTranscript") or "")
+
+    sections = workflow_sections(text)
+    if "TRANSCRIPT" in sections:
+        return clean_text(sections.get("TRANSCRIPT", ""))
+
+    return clean_text(re.sub(r"^\s*TRANSCRIPT\s*:\s*", "", text, flags=re.IGNORECASE))
+
+
+def normalize_latex_workflow_result(raw_text):
+    text = (raw_text or "").strip()
+    text = re.sub(r"^```(?:text|plaintext)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+
+    sections = workflow_sections(text)
+    if "ACTION" in sections or "LATEX" in sections:
+        action = normalize_workflow_action(sections.get("ACTION"))
+        latex = clean_raw_latex_result(sections.get("LATEX", ""), require_math=True)
+        return {"parsed": True, "action": action, "latex": latex}
+
+    match = re.search(
+        r"(?:ACTION\s*:\s*(?P<action>[^\r\n]+))?\s*LATEX\s*:\s*(?P<latex>[\s\S]*?)(?:\s*END\s*)?$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        action = normalize_workflow_action(match.group("action"))
+        latex = clean_raw_latex_result(match.group("latex"), require_math=True)
+        return {"parsed": True, "action": action, "latex": latex}
+
+    parsed = parse_json_response(text)
+    if isinstance(parsed, dict):
+        action = normalize_workflow_action(parsed.get("action") or parsed.get("type"))
+        latex = parsed.get("latex")
+        if latex is not None:
+            latex = restore_json_decoded_latex_escapes(latex)
+            latex = clean_raw_latex_result(latex, require_math=True)
+        return {"parsed": True, "action": action, "latex": latex}
+
+    latex = normalize_latex_result(text)
+    if latex and not looks_like_latex_or_math_source(latex):
+        latex = None
+    return {"parsed": False, "action": "insert", "latex": latex}
+
+
+def normalize_latex_result(raw_text):
+    relaxed_latex = relaxed_json_string_field(raw_text, "latex")
+    if relaxed_latex is not None:
+        latex = restore_json_decoded_latex_escapes(relaxed_latex)
+        return clean_raw_latex_result(latex)
+
+    parsed = parse_json_response(raw_text)
+    if isinstance(parsed, dict):
+        latex = parsed.get("latex")
+        if latex is None:
+            return None
+
+        latex = restore_json_decoded_latex_escapes(latex)
+        return clean_raw_latex_result(latex)
+
+    return clean_raw_latex_result(raw_text)
+
+
+def transformers_device_candidates(torch, backend):
+    requested = str(backend or "gpu").strip().lower()
+    if requested == "cpu":
+        return ["cpu"]
+    if torch.cuda.is_available():
+        return ["gpu", "cpu"]
+    return ["cpu"]
+
+
+def transformers_dtype_for_device(torch, device_name):
+    if device_name == "gpu" and torch.cuda.is_available():
+        return torch.bfloat16
+    return torch.float32
+
+
+def transformers_device_map(device_name):
+    return "auto" if device_name == "gpu" else {"": "cpu"}
+
+
+def configure_transformers_runtime(torch):
+    try:
+        torch.set_float32_matmul_precision("high")
+    except Exception:
+        pass
+
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = True
+    except Exception:
+        pass
+
+    try:
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+    except Exception:
+        pass
+
+
+def transformers_attention_implementations(device_name):
+    if device_name == "gpu" and importlib.util.find_spec("flash_attn") is not None:
+        return ["flash_attention_2", "sdpa"]
+    return ["sdpa"]
+
+
+def transformers_from_pretrained(model_class, model_id, torch, device_name, cache_dir=None):
+    base_kwargs = {
+        "device_map": transformers_device_map(device_name),
+        "cache_dir": cache_dir,
+    }
+    base_kwargs = {key: value for key, value in base_kwargs.items() if value is not None}
+    dtype = transformers_dtype_for_device(torch, device_name)
+
+    for attention_implementation in transformers_attention_implementations(device_name):
+        kwargs = {
+            **base_kwargs,
+            "attn_implementation": attention_implementation,
+        }
+        try:
+            try:
+                return model_class.from_pretrained(model_id, dtype=dtype, **kwargs)
+            except TypeError:
+                return model_class.from_pretrained(model_id, torch_dtype=dtype, **kwargs)
+        except Exception:
+            if attention_implementation == "flash_attention_2":
+                continue
+            raise
+
+
+def load_transformers_model(command, emit_progress=None):
+    global engine
+    global engine_load_command
+    global engine_backend_name
+    global engine_runtime
+    global engine_speculative_decoding
+    global transformers_processor
+    global transformers_assistant_model
+    global transformers_torch
+    global transformers_mtp_enabled
+    global transformers_static_cache_supported
+
+    load_started = time.perf_counter()
+    torch, AutoProcessor, AutoModelForMultimodalLM, AutoModelForCausalLM = import_transformers_runtime()
+    configure_transformers_runtime(torch)
 
     if engine is not None:
-        return {"ready": True}
+        return {
+            "ready": True,
+            "backend": engine_backend_name,
+            "runtime": engine_runtime,
+            "speculativeDecoding": engine_speculative_decoding,
+        }
+
+    model_id = command.get("modelId")
+    if not model_id:
+        raise RuntimeError("Transformers runtime requires a Hugging Face model id.")
+
+    cache_dir = command.get("cacheDir")
+    mtp_requested = command.get("transformersMtp") is not False
+    download_ids = [model_id]
+    if mtp_requested:
+        download_ids.append(f"{model_id}-assistant")
+    download_transformers_snapshots(download_ids, cache_dir, emit_progress)
+
+    last_error = None
+    selected_device = None
+    for device_name in transformers_device_candidates(torch, command.get("backend")):
+        try:
+            processor = AutoProcessor.from_pretrained(model_id, padding_side="left", cache_dir=cache_dir)
+            model = transformers_from_pretrained(AutoModelForMultimodalLM, model_id, torch, device_name, cache_dir)
+            assistant_model = None
+            if command.get("transformersMtp") is not False:
+                assistant_model = transformers_from_pretrained(
+                    AutoModelForCausalLM,
+                    f"{model_id}-assistant",
+                    torch,
+                    device_name,
+                    cache_dir,
+                )
+                assistant_model.generation_config.num_assistant_tokens = parse_positive_int(
+                    command.get("transformersMtpDraftTokens")
+                ) or 4
+                assistant_model.generation_config.num_assistant_tokens_schedule = "heuristic"
+
+            model.eval()
+            if assistant_model is not None:
+                assistant_model.eval()
+
+            engine = model
+            transformers_processor = processor
+            transformers_assistant_model = assistant_model
+            transformers_torch = torch
+            transformers_mtp_enabled = assistant_model is not None
+            transformers_static_cache_supported = True
+            selected_device = device_name
+            break
+        except Exception as exc:
+            last_error = exc
+            engine = None
+            transformers_processor = None
+            transformers_assistant_model = None
+            transformers_torch = None
+            transformers_mtp_enabled = False
+            transformers_static_cache_supported = True
+
+    if engine is None:
+        raise last_error or RuntimeError("Transformers Gemma model could not be loaded.")
+
+    engine_load_command = dict(command)
+    engine_backend_name = selected_device or "cpu"
+    engine_runtime = "transformers"
+    engine_speculative_decoding = "mtp" if transformers_mtp_enabled else "disabled"
+    result = {
+        "ready": True,
+        "backend": engine_backend_name,
+        "runtime": engine_runtime,
+        "speculativeDecoding": engine_speculative_decoding,
+    }
+    if engine_backend_name == "cpu" and last_error is not None:
+        result["backendFallbackReason"] = str(last_error)
+    log_timing(
+        "model-load",
+        load_started,
+        runtime=engine_runtime,
+        backend=engine_backend_name,
+        speculative=engine_speculative_decoding,
+    )
+    return result
+
+
+def load_litert_model(command):
+    global engine
+    global engine_load_command
+    global engine_backend_name
+    global engine_speculative_decoding
+    global engine_runtime
+
+    load_started = time.perf_counter()
+    litert_lm = import_litert_lm()
+
+    if engine is not None:
+        return {
+            "ready": True,
+            "backend": engine_backend_name,
+            "runtime": engine_runtime,
+            "speculativeDecoding": engine_speculative_decoding,
+        }
 
     if hasattr(litert_lm, "set_min_log_severity") and hasattr(litert_lm, "LogSeverity"):
         litert_lm.set_min_log_severity(litert_lm.LogSeverity.ERROR)
-    kwargs = {
-        "backend": backend_from_name(litert_lm, command.get("backend")),
-        "audio_backend": backend_from_name(litert_lm, command.get("audioBackend")),
-    }
+    backend_candidates = backend_candidates_from_name(litert_lm, command.get("backend"))
+    audio_backend_candidates = backend_candidates_from_name(litert_lm, command.get("audioBackend"))
+    max_num_tokens = parse_positive_int(command.get("maxNumTokens"))
+    base_kwargs = {}
     cache_dir = command.get("cacheDir")
     if cache_dir:
-        kwargs["cache_dir"] = cache_dir
+        base_kwargs["cache_dir"] = cache_dir
+    if max_num_tokens:
+        base_kwargs["max_num_tokens"] = max_num_tokens
 
-    engine = litert_lm.Engine(command["modelPath"], **kwargs)
-    if hasattr(engine, "__enter__"):
-        entered_engine = engine.__enter__()
-        if entered_engine is not None:
-            engine = entered_engine
-    return {"ready": True}
+    last_error = None
+    selected_backend = None
+    selected_speculative_mode = None
+    for backend in backend_candidates:
+        for audio_backend in audio_backend_candidates:
+            for speculative_mode in speculative_modes_for_backend(backend, command):
+                kwargs = {
+                    **base_kwargs,
+                    "backend": backend,
+                    "audio_backend": audio_backend,
+                }
+                apply_speculative_mode(kwargs, speculative_mode)
+                try:
+                    candidate_engine = litert_lm.Engine(command["modelPath"], **kwargs)
+                    if hasattr(candidate_engine, "__enter__"):
+                        entered_engine = candidate_engine.__enter__()
+                        if entered_engine is not None:
+                            candidate_engine = entered_engine
+                    engine = candidate_engine
+                    selected_backend = backend
+                    selected_speculative_mode = speculative_mode
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    engine = None
+            if engine is not None:
+                break
+        if engine is not None:
+            break
 
-
-def transcribe(command):
     if engine is None:
-        raise RuntimeError("LiteRT-LM engine has not been loaded.")
+        raise last_error or RuntimeError("LiteRT-LM engine could not be loaded.")
 
-    message = {
+    engine_load_command = dict(command)
+    engine_backend_name = backend_name(selected_backend)
+    engine_runtime = "litert"
+    engine_speculative_decoding = selected_speculative_mode or "default"
+    result = {
+        "ready": True,
+        "backend": engine_backend_name,
+        "runtime": engine_runtime,
+        "speculativeDecoding": engine_speculative_decoding,
+    }
+    if engine_speculative_decoding != "enabled" and last_error is not None:
+        result["speculativeFallbackReason"] = str(last_error)
+    log_timing("model-load", load_started, backend=engine_backend_name, speculative=engine_speculative_decoding)
+    return result
+
+
+def load_model(command, emit_progress=None):
+    if normalize_runtime(command.get("runtime")) == "transformers":
+        return load_transformers_model(command, emit_progress)
+    return load_litert_model(command)
+
+
+def close_engine():
+    global engine
+    global engine_backend_name
+    global engine_speculative_decoding
+    global engine_runtime
+    global transformers_processor
+    global transformers_assistant_model
+    global transformers_torch
+    global transformers_mtp_enabled
+    if engine is None:
+        return
+
+    if engine_runtime == "litert" and hasattr(engine, "__exit__"):
+        try:
+            engine.__exit__(None, None, None)
+        except Exception:
+            pass
+    elif engine_runtime == "litert" and hasattr(engine, "close"):
+        try:
+            engine.close()
+        except Exception:
+            pass
+    engine = None
+    engine_backend_name = None
+    engine_speculative_decoding = None
+    engine_runtime = None
+    transformers_processor = None
+    transformers_assistant_model = None
+    transformers_mtp_enabled = False
+    if transformers_torch is not None and transformers_torch.cuda.is_available():
+        try:
+            transformers_torch.cuda.empty_cache()
+        except Exception:
+            pass
+    transformers_torch = None
+
+
+def reload_model_on_cpu(force=False):
+    global engine_load_command
+    global engine_backend_name
+
+    if not engine_load_command:
+        return False
+    if engine_backend_name == "cpu" and not force:
+        return False
+
+    close_engine()
+    command = dict(engine_load_command)
+    command["backend"] = "cpu"
+    command["audioBackend"] = "cpu"
+    load_model(command)
+    return True
+
+
+def transformers_to_model_device(inputs):
+    dtype = getattr(engine, "dtype", None)
+    device = getattr(engine, "device", None)
+    if device is None and hasattr(engine, "hf_device_map"):
+        device = next(iter(getattr(engine, "hf_device_map", {}).values()), None)
+
+    try:
+        return inputs.to(device, dtype=dtype) if dtype is not None else inputs.to(device)
+    except Exception:
+        try:
+            return inputs.to(getattr(engine, "device"))
+        except Exception:
+            return inputs
+
+
+def transformers_generate(messages, max_new_tokens):
+    global transformers_static_cache_supported
+
+    if engine is None or transformers_processor is None or transformers_torch is None:
+        raise RuntimeError("Transformers Gemma model has not been loaded.")
+
+    inputs = transformers_processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    inputs = transformers_to_model_device(inputs)
+    input_len = inputs["input_ids"].shape[-1]
+    generate_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+        "use_cache": True,
+    }
+    if transformers_static_cache_supported:
+        generate_kwargs["cache_implementation"] = "static"
+    if transformers_assistant_model is not None:
+        generate_kwargs["assistant_model"] = transformers_assistant_model
+
+    try:
+        with transformers_torch.inference_mode():
+            outputs = engine.generate(**inputs, **generate_kwargs)
+    except Exception:
+        if generate_kwargs.get("cache_implementation") != "static":
+            raise
+        transformers_static_cache_supported = False
+        generate_kwargs.pop("cache_implementation", None)
+        with transformers_torch.inference_mode():
+            outputs = engine.generate(**inputs, **generate_kwargs)
+
+    return transformers_processor.decode(outputs[0][input_len:], skip_special_tokens=True)
+
+
+def transformers_audio_messages(audio_path):
+    resolved_audio_path = str(Path(audio_path).resolve())
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": build_transcription_prompt()},
+                {"type": "audio", "path": resolved_audio_path},
+            ],
+        }
+    ]
+
+
+def transformers_text_messages(text):
+    return [
+        {
+            "role": "user",
+            "content": text,
+        }
+    ]
+
+
+def build_transformers_latex_workflow_prompt(transcript, current_row_latex=None):
+    current_row_latex = (current_row_latex or "").strip() or "(empty)"
+    return f"Current row LaTeX:\n{current_row_latex}\n\n{build_latex_workflow_prompt(transcript)}"
+
+
+def run_transcription(command):
+    if engine is None:
+        raise RuntimeError("Speech model has not been loaded.")
+
+    total_started = time.perf_counter()
+    result_label = "error"
+    transcript_message = {
         "role": "user",
         "content": [
             {"type": "audio", "path": command["audioPath"]},
             {
                 "type": "text",
-                "text": PROMPT_TEMPLATE.format(
-                    current_row_latex=command.get("currentRowLatex") or "(empty)"
-                ),
+                "text": build_transcription_prompt(),
             },
         ],
     }
 
-    with engine.create_conversation() as conversation:
-        response = conversation.send_message(message)
+    try:
+        transcript_started = time.perf_counter()
+        if engine_runtime == "transformers":
+            transcript_response_text = transformers_generate(transformers_audio_messages(command["audioPath"]), 128)
+        else:
+            with engine.create_conversation(automatic_tool_calling=False) as conversation:
+                transcript_response = conversation.send_message(transcript_message)
+            transcript_response_text = response_text(transcript_response)
+        log_timing("transcription-pass", transcript_started)
 
-    return {"transcript": clean_text(response_text(response))}
+        transcript = normalize_transcription_result(transcript_response_text)
+        if not transcript:
+            result_label = "ignore"
+            return {"transcript": "", "action": {"type": "ignore"}}
+
+        command_started = time.perf_counter()
+        command_action = lookup_command_action(transcript, command_database_path(command))
+        log_timing("command-lookup", command_started)
+        if command_action:
+            result_label = f"command:{command_action.get('command')}"
+            return {"transcript": transcript, "action": command_action}
+
+        latex_message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": build_latex_workflow_prompt(transcript),
+                },
+            ],
+        }
+
+        latex_started = time.perf_counter()
+        if engine_runtime == "transformers":
+            latex_response_text = transformers_generate(
+                transformers_text_messages(
+                    build_transformers_latex_workflow_prompt(transcript, command.get("currentRowLatex"))
+                ),
+                256,
+            )
+        else:
+            latex_response_text = send_latex_workflow_message(latex_message, command.get("currentRowLatex"))
+        log_timing("latex-pass", latex_started)
+
+        latex_result = normalize_latex_workflow_result(latex_response_text)
+        latex = latex_result["latex"]
+        if latex:
+            latex = repair_latex_with_spoken_operators(transcript, latex)
+
+        if latex_result["action"] == "replace-row" and latex:
+            result_label = "replace-row"
+            return {"transcript": transcript, "action": {"type": "replace-row", "latex": latex}}
+
+        if latex:
+            result_label = "insert:latex"
+            return {"transcript": transcript, "action": {"type": "insert", "insertMode": "latex", "text": latex}}
+
+        simple_math_latex = simple_math_phrase_to_latex(transcript)
+        if simple_math_latex:
+            result_label = "insert:simple-math"
+            return {"transcript": transcript, "action": {"type": "insert", "insertMode": "latex", "text": simple_math_latex}}
+
+        result_label = "insert:text"
+        return {"transcript": transcript, "action": {"type": "insert", "insertMode": "text", "text": transcript}}
+    finally:
+        log_timing("total-request", total_started, result=result_label)
 
 
-def handle(command):
+def transcribe(command):
+    try:
+        return run_transcription(command)
+    except Exception as first_error:
+        if not reload_model_on_cpu(force=True):
+            raise
+
+        try:
+            return run_transcription(command)
+        except Exception as second_error:
+            raise RuntimeError(
+                f"{second_error} (retry on CPU also failed after initial error: {first_error})"
+            ) from second_error
+
+
+def handle(command, emit_progress=None):
     if command["type"] == "load":
-        return load_model(command)
+        return load_model(command, emit_progress)
+    if command["type"] == "list-commands":
+        return list_commands(command)
+    if command["type"] == "add-command-alias":
+        return add_command_alias(command)
+    if command["type"] == "delete-command-alias":
+        return delete_command_alias(command)
     if command["type"] == "transcribe":
         return transcribe(command)
     raise ValueError(f"Unknown command type: {command['type']}")
@@ -112,11 +2191,18 @@ def main():
             continue
 
         command = json.loads(line)
+        request_id = command.get("id")
+
+        def emit_progress(payload, request_id=request_id):
+            if request_id is None:
+                return
+            send({"id": request_id, "progress": payload})
+
         try:
-            send({"id": command["id"], "ok": True, "result": handle(command)})
+            send({"id": request_id, "ok": True, "result": handle(command, emit_progress)})
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            send({"id": command.get("id"), "ok": False, "error": str(exc)})
+            send({"id": request_id, "ok": False, "error": str(exc)})
 
 
 if __name__ == "__main__":

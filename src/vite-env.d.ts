@@ -5,6 +5,8 @@ import type {
 	AppSettingsPayload,
 	AppSettingsUpdatePayload,
 	SpeechAudioChunkPayload,
+	SpeechCommandAliasPayload,
+	SpeechCommandInfo,
 	SpeechModelStatusPayload,
 	SpeechTranscriptResult,
 	WindowControlAction,
@@ -31,6 +33,9 @@ declare global {
 			restartApp: () => Promise<void>
 			getSpeechModelStatus: () => Promise<SpeechModelStatusPayload>
 			loadSpeechModel: () => Promise<SpeechModelStatusPayload>
+			listSpeechCommands: () => Promise<SpeechCommandInfo[]>
+			addSpeechCommandAlias: (payload: SpeechCommandAliasPayload) => Promise<SpeechCommandInfo[]>
+			deleteSpeechCommandAlias: (payload: SpeechCommandAliasPayload) => Promise<SpeechCommandInfo[]>
 			transcribeSpeechChunk: (payload: SpeechAudioChunkPayload) => Promise<SpeechTranscriptResult>
 			onSpeechModelStatusChange: (listener: (status: SpeechModelStatusPayload) => void) => () => void
 			windowControl: (action: WindowControlAction) => Promise<void>

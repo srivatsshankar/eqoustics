@@ -1,1 +1,7 @@
-litert-lm-api
+litert-lm-api>=0.11.0
+torch
+torchvision
+accelerate
+transformers
+pillow
+librosa

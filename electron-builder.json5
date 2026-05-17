@@ -1,11 +1,11 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "com.eqoustics.beta",
   "asar": true,
-  "productName": "YourAppName",
+  "productName": "Eqoustics",
   "directories": {
-    "output": "release/${version}"
+    "output": "release/beta/${version}"
   },
   "files": [
     "dist",
@@ -15,14 +15,12 @@
     {
       "from": "electron/python",
       "to": "python"
+    },
+    {
+      "from": ".eqoustics-python-portable",
+      "to": "python-venv"
     }
   ],
-  "mac": {
-    "target": [
-      "dmg"
-    ],
-    "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
-  },
   "win": {
     "target": [
       {
@@ -30,20 +28,23 @@
         "arch": [
           "x64"
         ]
+      },
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
       }
-    ],
-    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+    ]
   },
   "nsis": {
+    "artifactName": "${productName}-Beta-Windows-Setup-${version}.${ext}",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
   },
-  "linux": {
-    "target": [
-      "AppImage"
-    ],
-    "artifactName": "${productName}-Linux-${version}.${ext}"
+  "portable": {
+    "artifactName": "${productName}-Beta-Windows-Portable-${version}.${ext}"
   }
 }
