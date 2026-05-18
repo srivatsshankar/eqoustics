@@ -56,6 +56,8 @@ The easiest way to test Eqoustics is to run the Windows portable executable from
 release/beta/0.0.0-beta.0/Eqoustics-Beta-Windows-Portable-0.0.0-beta.0.exe
 ```
 
+The portable launcher is silent. On first launch it caches the bundled app files in the Windows temp directory, then later launches reuse that cache and open directly from the same single executable.
+
 ### Option 2: Install Dependencies and Run Development Mode
 
 Use this path if you want to run from source with hot reloading.
@@ -82,7 +84,7 @@ chmod +x run-dev-install.sh run-dev.sh
 ./run-dev.sh
 ```
 
-The install scripts install the required Node packages and create a local `.eqoustics-python` virtual environment for Python speech dependencies, including the optional Transformers runtime packages. On Windows, the local virtual environment installs CUDA-enabled PyTorch so Transformers can use GPU acceleration when CUDA is available while still falling back to CPU. Development setup skips the portable Python packaging step so hot-reload testing does not rebuild the executable runtime.
+The install scripts install the required Node packages and create a local `.eqoustics-python` virtual environment for the LiteRT speech dependency. Development setup skips the portable Python packaging step so hot-reload testing does not rebuild the executable runtime.
 
 ### Build a Windows Beta Release
 
@@ -105,7 +107,7 @@ If dependencies are already installed, you can build directly:
 npm run build:win
 ```
 
-The Windows build command also prepares `.eqoustics-python` before packaging. It then creates a self-contained `.eqoustics-python-portable` runtime from the embeddable Windows Python package and embeds it in the portable executable as `python-venv`, so external users can run Eqoustics without installing Python or the speech packages. Portable packaging can take several minutes because that runtime is large; the build prints periodic `Still packaging...` messages while the executable is being assembled.
+The Windows build command prepares a LiteRT-only Python runtime before packaging. It creates a self-contained `.eqoustics-python-portable` runtime from the embeddable Windows Python package and embeds it in the portable executable as `python-venv`, so external users can run Eqoustics without installing Python or speech packages. The portable executable uses a silent cache-aware launcher, so users see the app open directly instead of an extraction window remaining behind it. The build prints periodic `Still packaging...` messages while the executable is being assembled.
 
 Build artifacts are written to:
 

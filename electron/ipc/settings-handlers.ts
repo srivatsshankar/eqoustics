@@ -6,12 +6,11 @@ import {
   type AppSettingsUpdatePayload,
   type AppearancePreference,
   type SpeechAccelerationBackend,
-  type SpeechInferenceRuntime,
   type SpeechModelSize,
 } from '../../src/shared/ipc/channels'
 
 export const APP_SETTINGS_KEY = 'appSettings'
-const APP_SETTINGS_VERSION = 3
+const APP_SETTINGS_VERSION = 4
 
 type ElectronStoreLike = {
   get: (key: string) => unknown
@@ -24,9 +23,6 @@ interface StoredAppSettings {
   appearance?: AppearancePreference
   speechModelSize?: SpeechModelSize
   speechAcceleration?: SpeechAccelerationBackend
-  speechInferenceRuntime?: SpeechInferenceRuntime
-  speechInferenceRuntimeConfigured?: boolean
-  transformersMtp?: boolean
 }
 
 function defaultSpeechModelSize(): SpeechModelSize {
@@ -65,18 +61,6 @@ function normalizeSpeechAcceleration(value: unknown): SpeechAccelerationBackend 
   return defaultSpeechAcceleration()
 }
 
-function normalizeSpeechInferenceRuntime(value: unknown): SpeechInferenceRuntime {
-  return value === 'transformers' ? 'transformers' : 'litert'
-}
-
-function readSpeechInferenceRuntime(stored: StoredAppSettings): SpeechInferenceRuntime {
-  if (stored.speechInferenceRuntimeConfigured) {
-    return normalizeSpeechInferenceRuntime(stored.speechInferenceRuntime)
-  }
-
-  return 'litert'
-}
-
 function readStoredSettings(store: ElectronStoreLike): StoredAppSettings {
   const stored = store.get(APP_SETTINGS_KEY)
   return stored && typeof stored === 'object' ? stored as StoredAppSettings : {}
@@ -92,14 +76,11 @@ export function readAppSettings(store: ElectronStoreLike): AppSettingsPayload {
     appearance: normalizeAppearance(stored.appearance),
     speechModelSize: normalizeSpeechModelSize(stored.speechModelSize),
     speechAcceleration: normalizeSpeechAcceleration(stored.speechAcceleration),
-    speechInferenceRuntime: readSpeechInferenceRuntime(stored),
-    transformersMtp: stored.transformersMtp !== false,
     totalMemoryBytes: 0,
   }
 }
 
 function updateAppSettings(store: ElectronStoreLike, update: AppSettingsUpdatePayload) {
-  const stored = readStoredSettings(store)
   const current = readAppSettings(store)
   const next: StoredAppSettings = {
     version: APP_SETTINGS_VERSION,
@@ -115,14 +96,6 @@ function updateAppSettings(store: ElectronStoreLike, update: AppSettingsUpdatePa
     speechAcceleration: update.speechAcceleration === undefined
       ? current.speechAcceleration
       : normalizeSpeechAcceleration(update.speechAcceleration),
-    speechInferenceRuntime: update.speechInferenceRuntime === undefined
-      ? current.speechInferenceRuntime
-      : normalizeSpeechInferenceRuntime(update.speechInferenceRuntime),
-    speechInferenceRuntimeConfigured: update.speechInferenceRuntime !== undefined
-      || stored.speechInferenceRuntimeConfigured === true,
-    transformersMtp: update.transformersMtp === undefined
-      ? current.transformersMtp
-      : update.transformersMtp !== false,
   }
 
   store.set(APP_SETTINGS_KEY, next)

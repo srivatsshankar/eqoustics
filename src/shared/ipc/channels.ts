@@ -32,17 +32,14 @@ export type WindowStatePayload = { isMaximized: boolean }
 export type AppearancePreference = 'system' | 'light' | 'dark'
 export type SpeechModelSize = '2b' | '4b'
 export type SpeechAccelerationBackend = 'gpu' | 'cpu'
-export type SpeechInferenceRuntime = 'litert' | 'transformers'
 export interface AppSettingsPayload {
   microphoneDeviceId: string | null
   appearance: AppearancePreference
   speechModelSize: SpeechModelSize
   speechAcceleration: SpeechAccelerationBackend
-  speechInferenceRuntime: SpeechInferenceRuntime
-  transformersMtp: boolean
   totalMemoryBytes: number
 }
-export type AppSettingsUpdatePayload = Partial<Pick<AppSettingsPayload, 'microphoneDeviceId' | 'appearance' | 'speechModelSize' | 'speechAcceleration' | 'speechInferenceRuntime' | 'transformersMtp'>>
+export type AppSettingsUpdatePayload = Partial<Pick<AppSettingsPayload, 'microphoneDeviceId' | 'appearance' | 'speechModelSize' | 'speechAcceleration'>>
 export type SpeechModelState = 'idle' | 'loading' | 'ready' | 'error'
 export type SpeechModelLoadStage = 'python' | 'downloading' | 'initializing'
 

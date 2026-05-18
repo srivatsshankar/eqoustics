@@ -1,28 +1,15 @@
-export type AppearanceMode = 'system' | 'light' | 'dark'
-export type SpeechModelSize = '2b' | '4b' | '26b' | '31b'
-export type SpeechAccelerationBackend = 'gpu' | 'cpu'
-export type SpeechInferenceRuntime = 'litert' | 'transformers'
+import type {
+  AppSettingsPayload as ActiveAppSettingsPayload,
+  AppearancePreference,
+  SpeechAccelerationBackend,
+  SpeechModelSize,
+} from '../ipc/channels'
 
-export interface AppSettings {
-  microphoneDeviceId: string
-  appearance: AppearanceMode
-  speechModelSize: SpeechModelSize
-  speechAcceleration: SpeechAccelerationBackend
-  speechInferenceRuntime: SpeechInferenceRuntime
-  transformersMtp: boolean
-}
+export type AppearanceMode = AppearancePreference
+export type { SpeechAccelerationBackend, SpeechModelSize }
+export type AppSettings = ActiveAppSettingsPayload
+export type AppSettingsPayload = ActiveAppSettingsPayload
 
-export interface SpeechModelOption {
-  size: SpeechModelSize
-  label: string
-  modelId: string
-}
-
-export interface AppSettingsPayload {
-  settings: AppSettings
-  modelOptions: SpeechModelOption[]
-}
-
-export interface SettingsUpdateResult extends AppSettingsPayload {
+export interface SettingsUpdateResult extends ActiveAppSettingsPayload {
   restartRequired: boolean
 }

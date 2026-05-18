@@ -11,7 +11,7 @@ fi
 echo "[Eqoustics] Installing Node dependencies..."
 npm install
 
-echo "[Eqoustics] Building self-contained Windows app folder and portable executable..."
+echo "[Eqoustics] Building self-contained Windows portable executable..."
 npm run build:all
 
-echo "[Eqoustics] Windows app folder and portable executable are in release/beta/<version>."
+echo "[Eqoustics] Windows portable executable is in release/beta/<version>."

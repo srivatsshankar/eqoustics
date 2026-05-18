@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, protocol, session } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, protocol, session, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +44,8 @@ export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
 export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
+
+app.setName('Eqoustics')
 
 let win: BrowserWindow | null
 const store = new Store()
@@ -143,8 +145,30 @@ function registerWindowControlHandlers() {
   })
 }
 
+function isMediaPermission(permission: string) {
+  return permission === 'media' || permission === 'audioCapture'
+}
+
+function isTrustedAppContents(webContents: WebContents | null) {
+  if (!webContents) return false
+  const url = webContents.getURL()
+  if (VITE_DEV_SERVER_URL && url.startsWith(VITE_DEV_SERVER_URL)) return true
+  return url.startsWith('file://')
+}
+
+function registerMediaPermissionHandlers() {
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(isMediaPermission(permission) && isTrustedAppContents(webContents))
+  })
+
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return isMediaPermission(permission) && isTrustedAppContents(webContents)
+  })
+}
+
 function createWindow() {
   win = new BrowserWindow({
+    title: 'Untitled Notebook - Eqoustics',
     icon: getAppIconPath(),
     backgroundColor: '#ffffff',
     frame: false,
@@ -198,9 +222,7 @@ app.whenReady().then(() => {
   registerSettingsHandlers(store)
   registerSpeechModelHandlers(store)
   registerVadAssetProtocol()
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'media')
-  })
+  registerMediaPermissionHandlers()
   createWindow()
   Menu.setApplicationMenu(null)
 })

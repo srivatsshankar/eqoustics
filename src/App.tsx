@@ -61,8 +61,6 @@ const FALLBACK_APP_SETTINGS: AppSettingsPayload = {
   appearance: 'system',
   speechModelSize: '2b',
   speechAcceleration: 'gpu',
-  speechInferenceRuntime: 'litert',
-  transformersMtp: true,
   totalMemoryBytes: 0,
 }
 
@@ -364,8 +362,6 @@ function App() {
   const documentShellRef = useRef<HTMLElement | null>(null)
   const initialSpeechModelSizeRef = useRef<AppSettingsPayload['speechModelSize']>(FALLBACK_APP_SETTINGS.speechModelSize)
   const initialSpeechAccelerationRef = useRef<AppSettingsPayload['speechAcceleration']>(FALLBACK_APP_SETTINGS.speechAcceleration)
-  const initialSpeechInferenceRuntimeRef = useRef<AppSettingsPayload['speechInferenceRuntime']>(FALLBACK_APP_SETTINGS.speechInferenceRuntime)
-  const initialTransformersMtpRef = useRef(FALLBACK_APP_SETTINGS.transformersMtp)
   const [isDirty, setIsDirty] = useState(false)
   const [isTableOfContentsOpen, setIsTableOfContentsOpen] = useState(readStoredTableOfContentsOpen)
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false)
@@ -393,8 +389,6 @@ function App() {
       setAppSettings(settings)
       initialSpeechModelSizeRef.current = settings.speechModelSize
       initialSpeechAccelerationRef.current = settings.speechAcceleration
-      initialSpeechInferenceRuntimeRef.current = settings.speechInferenceRuntime
-      initialTransformersMtpRef.current = settings.transformersMtp
       setDocument(nextDocument)
       speechDocumentRef.current = nextDocument
       setFilePath(null)
@@ -410,6 +404,10 @@ function App() {
   useEffect(() => {
     speechDocumentRef.current = document
   }, [document])
+
+  useEffect(() => {
+    window.document.title = `${titleBarLabelFromPath(filePath)} - Eqoustics`
+  }, [filePath])
 
   useEffect(() => {
     speechActiveCellIdRef.current = activeCellId
@@ -502,15 +500,20 @@ function App() {
   const updateAppSettings = useCallback(async (update: AppSettingsUpdatePayload) => {
     const nextSettings = await window.eqoustics.updateSettings(update)
     setAppSettings(nextSettings)
-    if (update.speechModelSize || update.speechAcceleration || update.speechInferenceRuntime || update.transformersMtp !== undefined) {
+    if (update.speechModelSize || update.speechAcceleration) {
       setIsModelRestartRequired(
         nextSettings.speechModelSize !== initialSpeechModelSizeRef.current
         || nextSettings.speechAcceleration !== initialSpeechAccelerationRef.current
-        || nextSettings.speechInferenceRuntime !== initialSpeechInferenceRuntimeRef.current
-        || nextSettings.transformersMtp !== initialTransformersMtpRef.current,
       )
     }
   }, [])
+
+  useEffect(() => {
+    if (!appSettings.microphoneDeviceId || microphones.length === 0) return
+    if (microphones.some((microphone) => microphone.deviceId === appSettings.microphoneDeviceId)) return
+
+    void updateAppSettings({ microphoneDeviceId: null })
+  }, [appSettings.microphoneDeviceId, microphones, updateAppSettings])
 
   const documentWithVisibleEditorState = useCallback((sourceDocument: NotebookDocument): NotebookDocument => {
     const activeLatex = activeCellId ? activeCellHandleRef.current?.getLatex() : null

@@ -3042,54 +3042,6 @@ export function EditorToolbar({
               GPU acceleration runs both audio and text inference on GPU, if the system is capable of running GPU reference.
             </p>
           </div>
-          <div className="settings-subsection">
-            <span className="file-menu-section-label">Inference runtime</span>
-            <div className="settings-segmented-control" role="radiogroup" aria-label="Speech inference runtime">
-              {[
-                { value: 'litert', label: 'LiteRT' },
-                { value: 'transformers', label: 'Transformers' },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`settings-segment${appSettings.speechInferenceRuntime === option.value ? ' settings-segment-active' : ''}`}
-                  role="radio"
-                  aria-checked={appSettings.speechInferenceRuntime === option.value}
-                  onClick={() => { void onUpdateSettings({ speechInferenceRuntime: option.value as AppSettingsPayload['speechInferenceRuntime'] }) }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="settings-menu-note">
-              Transformers uses the Hugging Face Gemma checkpoints. LiteRT uses the local LiteRT model package.
-            </p>
-          </div>
-          {appSettings.speechInferenceRuntime === 'transformers' ? (
-            <div className="settings-subsection">
-              <span className="file-menu-section-label">Transformers MTP</span>
-              <div className="settings-segmented-control" role="radiogroup" aria-label="Transformers multi-token prediction">
-                {[
-                  { value: true, label: 'On' },
-                  { value: false, label: 'Off' },
-                ].map((option) => (
-                  <button
-                    key={String(option.value)}
-                    type="button"
-                    className={`settings-segment${appSettings.transformersMtp === option.value ? ' settings-segment-active' : ''}`}
-                    role="radio"
-                    aria-checked={appSettings.transformersMtp === option.value}
-                    onClick={() => { void onUpdateSettings({ transformersMtp: option.value }) }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <p className="settings-menu-note">
-                MTP loads the Gemma assistant drafter model and uses speculative decoding in Transformers.
-              </p>
-            </div>
-          ) : null}
           {isModelRestartRequired ? (
             <div className="settings-restart-panel" role="status">
               <span>Restart to load the selected LiteRT speech settings.</span>

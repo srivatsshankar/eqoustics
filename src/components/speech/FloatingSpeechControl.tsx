@@ -179,7 +179,6 @@ function shortErrorMessage(error: string) {
   if (/python/i.test(error)) return 'Python unavailable'
   if (/no available backend|wasm/i.test(error)) return 'VAD unavailable'
   if (/litert_lm|litert-lm|lite_rt/i.test(error)) return 'LiteRT-LM missing'
-  if (/transformers|torch|torchvision|accelerate|pillow|pil|librosa/i.test(error)) return 'Transformers missing'
   if (/failed to open downloaded/i.test(error)) return 'Local file failed'
   if (/failed to fetch|networkerror/i.test(error)) return 'Fetch failed'
   if (/load failed/i.test(error)) return 'Model load failed'
@@ -207,14 +206,32 @@ function vadAssetBasePath() {
 }
 
 function microphoneConstraints(deviceId?: string | null): MediaStreamConstraints {
+  const audio: MediaTrackConstraints = {
+    deviceId: deviceId ? { exact: deviceId } : { ideal: 'default' },
+    channelCount: 1,
+    echoCancellation: true,
+    autoGainControl: true,
+    noiseSuppression: true,
+  }
+
   return {
-    audio: {
-      deviceId: deviceId ? { exact: deviceId } : undefined,
-      channelCount: 1,
-      echoCancellation: true,
-      autoGainControl: true,
-      noiseSuppression: true,
-    },
+    audio,
+  }
+}
+
+function isUnavailableMicrophoneError(error: unknown) {
+  if (!(error instanceof DOMException)) return false
+  return error.name === 'NotFoundError' || error.name === 'OverconstrainedError'
+}
+
+async function getMicrophoneStream(deviceId?: string | null) {
+  try {
+    return await navigator.mediaDevices.getUserMedia(microphoneConstraints(deviceId))
+  } catch (error) {
+    if (deviceId && isUnavailableMicrophoneError(error)) {
+      return navigator.mediaDevices.getUserMedia(microphoneConstraints(null))
+    }
+    throw error
   }
 }
 
@@ -644,7 +661,6 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
 
     setSpeechInputPreparationState('loading')
     const assetBasePath = vadAssetBasePath()
-    const streamConstraints = microphoneConstraints(microphoneDeviceId)
     const promise = MicVAD.new({
       model: 'v5',
       startOnLoad: false,
@@ -665,8 +681,8 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
           wasm: `${assetBasePath}ort-wasm-simd-threaded.jsep.wasm`,
         }
       },
-      getStream: () => navigator.mediaDevices.getUserMedia(streamConstraints),
-      resumeStream: () => navigator.mediaDevices.getUserMedia(streamConstraints),
+      getStream: () => getMicrophoneStream(microphoneDeviceId),
+      resumeStream: () => getMicrophoneStream(microphoneDeviceId),
       pauseStream: async (stream) => {
         stream.getTracks().forEach((track) => track.stop())
       },
@@ -711,15 +727,6 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
     processWakeCommandSegment,
     updateMicrophoneLevel,
   ])
-
-  useEffect(() => {
-    if (disabled || isListening || isStartingListeningRef.current || modelStatus.state !== 'ready') return
-
-    void prepareSpeechVad().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error)
-      setLastError(message)
-    })
-  }, [disabled, isListening, modelStatus.state, prepareSpeechVad])
 
   const stopListening = useCallback((releaseVad = false) => {
     isStartingListeningRef.current = false
@@ -869,12 +876,16 @@ export function FloatingSpeechControl({ disabled, microphoneDeviceId, onBeforeLi
   const isSpeechInputReady = speechInputPreparationState === 'ready'
     && preparedVadRef.current?.key === currentVadKey
     && vadRef.current !== null
-  const isPreparingSpeechInput = modelStatus.state === 'ready' && !disabled && !isSpeechInputReady && !lastError
+  const isPreparingSpeechInput = modelStatus.state === 'ready'
+    && !disabled
+    && speechInputPreparationState === 'loading'
+    && !isSpeechInputReady
+    && !lastError
   const speechWindowStatusClass = isPreparingSpeechInput ? 'loading' : statusClass
   const modelProgress = typeof modelStatus.loadProgress === 'number'
     ? Math.max(0, Math.min(100, modelStatus.loadProgress))
     : null
-  const showMicButton = modelStatus.state === 'ready' && (disabled || isSpeechInputReady) && !lastError
+  const showMicButton = modelStatus.state === 'ready' && !isPreparingSpeechInput && !lastError
   const showErrorIcon = Boolean(lastError)
   const loaderLabel = isPreparingSpeechInput ? 'Preparing microphone' : loaderLabelForStatus(modelStatus, lastError)
   const loadedLabel = modelProgress !== null

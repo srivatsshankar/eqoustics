@@ -12,7 +12,6 @@ import {
   type SpeechAudioChunkPayload,
   type SpeechCommandAliasPayload,
   type SpeechCommandInfo,
-  type SpeechInferenceRuntime,
   type SpeechModelLoadStage,
   type SpeechModelStatusPayload,
   type SpeechTranscriptResult,
@@ -21,30 +20,7 @@ import {
 import { readAppSettings } from './settings-handlers'
 
 const TARGET_AUDIO_SAMPLE_RATE_HZ = 16000
-const ANY_SPEECH_DEPENDENCY_CHECK_SCRIPT = `
-import importlib.util
-import sys
-has_litert = importlib.util.find_spec("litert_lm") is not None
-has_transformers = (
-    importlib.util.find_spec("torch") is not None
-    and importlib.util.find_spec("torchvision") is not None
-    and importlib.util.find_spec("transformers") is not None
-    and importlib.util.find_spec("accelerate") is not None
-    and importlib.util.find_spec("PIL") is not None
-    and importlib.util.find_spec("librosa") is not None
-)
-sys.exit(0 if has_litert or has_transformers else 1)
-`
 const LITERT_DEPENDENCY_CHECK_SCRIPT = 'import litert_lm'
-const TRANSFORMERS_DEPENDENCY_CHECK_SCRIPT = `
-import importlib.util
-import sys
-missing = [
-    package for package in ("torch", "torchvision", "transformers", "accelerate", "PIL", "librosa")
-    if importlib.util.find_spec(package) is None
-]
-sys.exit(1 if missing else 0)
-`
 
 const SPEECH_MODEL_OPTIONS: Record<SpeechModelSize, {
   modelId: string
@@ -102,7 +78,7 @@ interface PythonCommand {
   args: string[]
 }
 
-type PythonDependencyMode = SpeechInferenceRuntime | 'any' | 'stdlib'
+type PythonDependencyMode = 'litert' | 'stdlib'
 
 const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 3 * 60 * 1000
 
@@ -130,10 +106,6 @@ function modelPath(modelSize: SpeechModelSize) {
 
 function modelCacheDirectory() {
   return path.join(app.getPath('userData'), 'litert-lm-cache')
-}
-
-function transformersCacheDirectory() {
-  return path.join(app.getPath('userData'), 'huggingface-cache')
 }
 
 function commandDatabasePath() {
@@ -373,28 +345,18 @@ function commandRuns(candidate: PythonCommand) {
 }
 
 function dependencyCheckScript(mode: PythonDependencyMode) {
-  if (mode === 'litert') return LITERT_DEPENDENCY_CHECK_SCRIPT
-  if (mode === 'transformers') return TRANSFORMERS_DEPENDENCY_CHECK_SCRIPT
-  return ANY_SPEECH_DEPENDENCY_CHECK_SCRIPT
+  return mode === 'stdlib' ? 'import sys' : LITERT_DEPENDENCY_CHECK_SCRIPT
 }
 
 function commandHasSpeechDependency(candidate: PythonCommand, mode: PythonDependencyMode) {
   return commandExits(candidate, ['-c', dependencyCheckScript(mode)])
 }
 
-function missingDependencyMessage(mode: PythonDependencyMode) {
-  if (mode === 'transformers') {
-    return 'No Python runtime with Transformers speech dependencies found. Run run-dev-install.bat again, or install them into the Python Eqoustics uses with: python -m pip install --upgrade torch torchvision accelerate transformers pillow librosa. If you use a custom Python, set EQOUSTICS_PYTHON to that executable.'
-  }
-
-  if (mode === 'litert') {
-    return "No Python runtime with LiteRT-LM found. Run run-dev-install.bat again, or install it with: python -m pip install --upgrade 'litert-lm-api>=0.11.0'. If you use a custom Python, set EQOUSTICS_PYTHON to that executable."
-  }
-
-  return "No Python runtime with speech dependencies found. Run run-dev-install.bat again, or install electron/python/requirements-speech.txt into the Python Eqoustics uses."
+function missingDependencyMessage() {
+  return "No Python runtime with LiteRT-LM found. Run run-dev-install.bat again, or install it with: python -m pip install --upgrade 'litert-lm-api>=0.11.0'. If you use a custom Python, set EQOUSTICS_PYTHON to that executable."
 }
 
-async function resolvePythonCommand(mode: PythonDependencyMode = 'any') {
+async function resolvePythonCommand(mode: PythonDependencyMode) {
   let sawPython = false
   for (const candidate of pythonCandidates()) {
     if (!(await commandRuns(candidate))) {
@@ -411,7 +373,7 @@ async function resolvePythonCommand(mode: PythonDependencyMode = 'any') {
   }
 
   if (sawPython) {
-    throw new Error(missingDependencyMessage(mode))
+    throw new Error(missingDependencyMessage())
   }
 
   throw new Error('No Python 3 runtime found. Install Python or set EQOUSTICS_PYTHON to the Python executable.')
@@ -561,7 +523,7 @@ class PythonSpeechWorker {
   }
 }
 
-async function getWorker(requiredMode: PythonDependencyMode = 'any') {
+async function getWorker(requiredMode: PythonDependencyMode) {
   if (requiredMode === 'stdlib') {
     const existingCommandWorker = commandWorkerPromise ? await commandWorkerPromise.catch(() => null) : null
     if (commandWorkerPromise && !existingCommandWorker) {
@@ -588,7 +550,7 @@ async function getWorker(requiredMode: PythonDependencyMode = 'any') {
   if (modelWorkerPromise && !existingWorker) {
     modelWorkerPromise = null
   }
-  if (existingWorker && requiredMode !== 'any' && existingWorker.dependencyMode !== requiredMode) {
+  if (existingWorker && existingWorker.dependencyMode !== requiredMode) {
     existingWorker.close()
     if (loadedModelWorker === existingWorker) {
       loadedModelWorker = null
@@ -631,13 +593,7 @@ async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelSta
   loadPromise = (async () => {
     try {
       const modelSize = settings.speechModelSize
-      const modelAsset = settings.speechInferenceRuntime === 'litert'
-        ? await ensureSpeechModelAsset(modelSize)
-        : {
-          modelPath: '',
-          loadedBytes: 0,
-          totalBytes: undefined,
-        }
+      const modelAsset = await ensureSpeechModelAsset(modelSize)
       setStatus({
         state: 'loading',
         modelId: model.modelId,
@@ -647,7 +603,7 @@ async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelSta
         totalBytes: modelAsset.totalBytes,
       })
 
-      const worker = await getWorker(settings.speechInferenceRuntime)
+      const worker = await getWorker('litert')
       setStatus({
         state: 'loading',
         modelId: model.modelId,
@@ -661,13 +617,12 @@ async function loadSpeechModel(store: ElectronStoreLike): Promise<SpeechModelSta
         modelPath: modelAsset.modelPath,
         modelId: model.modelId,
         modelSize,
-        runtime: settings.speechInferenceRuntime,
+        runtime: 'litert',
         backend: settings.speechAcceleration,
         audioBackend: settings.speechAcceleration,
-        transformersMtp: settings.transformersMtp,
         maxNumTokens: process.env.EQOUSTICS_LITERT_MAX_TOKENS ? Number(process.env.EQOUSTICS_LITERT_MAX_TOKENS) : undefined,
         speculativeDecoding: process.env.EQOUSTICS_LITERT_SPECULATIVE_DECODING ?? 'true',
-        cacheDir: settings.speechInferenceRuntime === 'litert' ? modelCacheDirectory() : transformersCacheDirectory(),
+        cacheDir: modelCacheDirectory(),
       }, (progress) => {
         const stage: SpeechModelLoadStage = progress.stage ?? 'downloading'
         const totalBytes = progress.totalBytes

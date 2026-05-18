@@ -26,12 +26,6 @@
     "icon": "build/icon.ico",
     "target": [
       {
-        "target": "dir",
-        "arch": [
-          "x64"
-        ]
-      },
-      {
         "target": "portable",
         "arch": [
           "x64"
@@ -41,6 +35,6 @@
   },
   "portable": {
     "artifactName": "${productName}-Beta-Windows-Portable-${version}.${ext}",
-    "splashImage": "build/portable-splash.bmp"
+    "useZip": true
   }
 }

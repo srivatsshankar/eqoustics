@@ -1,17 +1,13 @@
-import fnmatch
-import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
-import threading
 import time
 import traceback
 
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 
 DEFAULT_COMMANDS = [
@@ -486,11 +482,6 @@ engine_load_command = None
 engine_backend_name = None
 engine_speculative_decoding = None
 engine_runtime = None
-transformers_processor = None
-transformers_assistant_model = None
-transformers_torch = None
-transformers_mtp_enabled = False
-transformers_static_cache_supported = True
 initialized_command_databases = set()
 command_cache = {}
 
@@ -535,157 +526,12 @@ def import_litert_lm():
         raise
 
 
-def import_transformers_runtime():
-    try:
-        import PIL
-        import librosa
-        import torch
-        import torchvision
-        from transformers import AutoModelForCausalLM, AutoModelForMultimodalLM, AutoProcessor
-        return torch, AutoProcessor, AutoModelForMultimodalLM, AutoModelForCausalLM
-    except ModuleNotFoundError as exc:
-        if exc.name in {"PIL", "librosa", "torch", "torchvision", "transformers", "accelerate"}:
-            raise RuntimeError(
-                "Transformers speech runtime dependencies are missing. "
-                "Install them with: python -m pip install --upgrade torch torchvision accelerate transformers pillow librosa. "
-                "If Eqoustics is using a different Python, set EQOUSTICS_PYTHON to that Python executable."
-            ) from exc
-        raise
-
-
-TRANSFORMERS_ARTIFACT_PATTERNS = [
-    "*.json",
-    "*.txt",
-    "*.jinja",
-    "*.model",
-    "*.tiktoken",
-    "*.safetensors",
-    "*.safetensors.index.json",
-    "*.bin",
-    "*.bin.index.json",
-]
-
-
-def matches_any_pattern(name, patterns):
-    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
-
-
-def directory_bytes(path):
-    total = 0
-    if not path or not os.path.isdir(path):
-        return total
-    for root, _dirs, files in os.walk(path):
-        for name in files:
-            entry = os.path.join(root, name)
-            try:
-                stat_result = os.lstat(entry)
-            except OSError:
-                continue
-            # Skip symlinks so HF's snapshots/ pointers don't double-count blob bytes.
-            if hasattr(stat_result, "st_mode") and (stat_result.st_mode & 0o170000) == 0o120000:
-                continue
-            total += stat_result.st_size
-    return total
-
-
-def repo_cache_directory(cache_dir, model_id):
-    return os.path.join(cache_dir, f"models--{model_id.replace('/', '--')}")
-
-
-def filtered_model_total_bytes(model_id, allow_patterns):
-    from huggingface_hub import HfApi
-
-    info = HfApi().model_info(model_id, files_metadata=True)
-    total = 0
-    for sibling in info.siblings or []:
-        if not matches_any_pattern(sibling.rfilename, allow_patterns):
-            continue
-        if sibling.size:
-            total += sibling.size
-    return total
-
-
-def download_transformers_snapshots(model_ids, cache_dir, emit_progress):
-    """Resolve and pre-download HF snapshots for the given models, emitting cumulative byte progress.
-
-    Falls back to letting `from_pretrained` handle the download if model_info or snapshot_download fails.
-    """
-    if not cache_dir or not model_ids:
-        return
-
-    try:
-        from huggingface_hub import snapshot_download
-    except Exception:
-        return
-
-    os.makedirs(cache_dir, exist_ok=True)
-    allow_patterns = TRANSFORMERS_ARTIFACT_PATTERNS
-
-    plan = []
-    grand_total = 0
-    for model_id in model_ids:
-        try:
-            model_total = filtered_model_total_bytes(model_id, allow_patterns)
-        except Exception:
-            # If we cannot resolve the size up front, fall back to letting from_pretrained handle it.
-            return
-        plan.append((model_id, model_total, repo_cache_directory(cache_dir, model_id)))
-        grand_total += model_total
-
-    if grand_total <= 0:
-        return
-
-    if emit_progress:
-        cached_total = sum(min(directory_bytes(model_dir), model_total) for _id, model_total, model_dir in plan)
-        emit_progress({"stage": "downloading", "loadedBytes": cached_total, "totalBytes": grand_total})
-
-    completed_bytes = 0
-    for model_id, model_total, model_dir in plan:
-        outcome = {"error": None}
-
-        def run_download(model_id=model_id):
-            try:
-                snapshot_download(
-                    repo_id=model_id,
-                    cache_dir=cache_dir,
-                    allow_patterns=allow_patterns,
-                )
-            except Exception as exc:
-                outcome["error"] = exc
-
-        thread = threading.Thread(target=run_download, name=f"hf-download:{model_id}", daemon=True)
-        thread.start()
-        while thread.is_alive():
-            if emit_progress:
-                current = directory_bytes(model_dir)
-                emit_progress({
-                    "stage": "downloading",
-                    "loadedBytes": completed_bytes + min(current, model_total),
-                    "totalBytes": grand_total,
-                })
-            thread.join(timeout=1.0)
-
-        if outcome["error"] is not None:
-            raise outcome["error"]
-
-        completed_bytes += model_total
-        if emit_progress:
-            emit_progress({
-                "stage": "downloading",
-                "loadedBytes": completed_bytes,
-                "totalBytes": grand_total,
-            })
-
-    if emit_progress:
-        emit_progress({"stage": "initializing"})
-
-
 def backend_name(value):
     return str(value).split(".")[-1].lower()
 
 
 def normalize_runtime(value):
-    return "transformers" if str(value or "").strip().lower() == "transformers" else "litert"
+    return "litert"
 
 
 def speech_timing_enabled():
@@ -1562,177 +1408,6 @@ def normalize_latex_result(raw_text):
     return clean_raw_latex_result(raw_text)
 
 
-def transformers_device_candidates(torch, backend):
-    requested = str(backend or "gpu").strip().lower()
-    if requested == "cpu":
-        return ["cpu"]
-    if torch.cuda.is_available():
-        return ["gpu", "cpu"]
-    return ["cpu"]
-
-
-def transformers_dtype_for_device(torch, device_name):
-    if device_name == "gpu" and torch.cuda.is_available():
-        return torch.bfloat16
-    return torch.float32
-
-
-def transformers_device_map(device_name):
-    return "auto" if device_name == "gpu" else {"": "cpu"}
-
-
-def configure_transformers_runtime(torch):
-    try:
-        torch.set_float32_matmul_precision("high")
-    except Exception:
-        pass
-
-    if not torch.cuda.is_available():
-        return
-
-    try:
-        torch.backends.cuda.matmul.allow_tf32 = True
-    except Exception:
-        pass
-
-    try:
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
-    except Exception:
-        pass
-
-
-def transformers_attention_implementations(device_name):
-    if device_name == "gpu" and importlib.util.find_spec("flash_attn") is not None:
-        return ["flash_attention_2", "sdpa"]
-    return ["sdpa"]
-
-
-def transformers_from_pretrained(model_class, model_id, torch, device_name, cache_dir=None):
-    base_kwargs = {
-        "device_map": transformers_device_map(device_name),
-        "cache_dir": cache_dir,
-    }
-    base_kwargs = {key: value for key, value in base_kwargs.items() if value is not None}
-    dtype = transformers_dtype_for_device(torch, device_name)
-
-    for attention_implementation in transformers_attention_implementations(device_name):
-        kwargs = {
-            **base_kwargs,
-            "attn_implementation": attention_implementation,
-        }
-        try:
-            try:
-                return model_class.from_pretrained(model_id, dtype=dtype, **kwargs)
-            except TypeError:
-                return model_class.from_pretrained(model_id, torch_dtype=dtype, **kwargs)
-        except Exception:
-            if attention_implementation == "flash_attention_2":
-                continue
-            raise
-
-
-def load_transformers_model(command, emit_progress=None):
-    global engine
-    global engine_load_command
-    global engine_backend_name
-    global engine_runtime
-    global engine_speculative_decoding
-    global transformers_processor
-    global transformers_assistant_model
-    global transformers_torch
-    global transformers_mtp_enabled
-    global transformers_static_cache_supported
-
-    load_started = time.perf_counter()
-    torch, AutoProcessor, AutoModelForMultimodalLM, AutoModelForCausalLM = import_transformers_runtime()
-    configure_transformers_runtime(torch)
-
-    if engine is not None:
-        return {
-            "ready": True,
-            "backend": engine_backend_name,
-            "runtime": engine_runtime,
-            "speculativeDecoding": engine_speculative_decoding,
-        }
-
-    model_id = command.get("modelId")
-    if not model_id:
-        raise RuntimeError("Transformers runtime requires a Hugging Face model id.")
-
-    cache_dir = command.get("cacheDir")
-    mtp_requested = command.get("transformersMtp") is not False
-    download_ids = [model_id]
-    if mtp_requested:
-        download_ids.append(f"{model_id}-assistant")
-    download_transformers_snapshots(download_ids, cache_dir, emit_progress)
-
-    last_error = None
-    selected_device = None
-    for device_name in transformers_device_candidates(torch, command.get("backend")):
-        try:
-            processor = AutoProcessor.from_pretrained(model_id, padding_side="left", cache_dir=cache_dir)
-            model = transformers_from_pretrained(AutoModelForMultimodalLM, model_id, torch, device_name, cache_dir)
-            assistant_model = None
-            if command.get("transformersMtp") is not False:
-                assistant_model = transformers_from_pretrained(
-                    AutoModelForCausalLM,
-                    f"{model_id}-assistant",
-                    torch,
-                    device_name,
-                    cache_dir,
-                )
-                assistant_model.generation_config.num_assistant_tokens = parse_positive_int(
-                    command.get("transformersMtpDraftTokens")
-                ) or 4
-                assistant_model.generation_config.num_assistant_tokens_schedule = "heuristic"
-
-            model.eval()
-            if assistant_model is not None:
-                assistant_model.eval()
-
-            engine = model
-            transformers_processor = processor
-            transformers_assistant_model = assistant_model
-            transformers_torch = torch
-            transformers_mtp_enabled = assistant_model is not None
-            transformers_static_cache_supported = True
-            selected_device = device_name
-            break
-        except Exception as exc:
-            last_error = exc
-            engine = None
-            transformers_processor = None
-            transformers_assistant_model = None
-            transformers_torch = None
-            transformers_mtp_enabled = False
-            transformers_static_cache_supported = True
-
-    if engine is None:
-        raise last_error or RuntimeError("Transformers Gemma model could not be loaded.")
-
-    engine_load_command = dict(command)
-    engine_backend_name = selected_device or "cpu"
-    engine_runtime = "transformers"
-    engine_speculative_decoding = "mtp" if transformers_mtp_enabled else "disabled"
-    result = {
-        "ready": True,
-        "backend": engine_backend_name,
-        "runtime": engine_runtime,
-        "speculativeDecoding": engine_speculative_decoding,
-    }
-    if engine_backend_name == "cpu" and last_error is not None:
-        result["backendFallbackReason"] = str(last_error)
-    log_timing(
-        "model-load",
-        load_started,
-        runtime=engine_runtime,
-        backend=engine_backend_name,
-        speculative=engine_speculative_decoding,
-    )
-    return result
-
-
 def load_litert_model(command):
     global engine
     global engine_load_command
@@ -1813,8 +1488,6 @@ def load_litert_model(command):
 
 
 def load_model(command, emit_progress=None):
-    if normalize_runtime(command.get("runtime")) == "transformers":
-        return load_transformers_model(command, emit_progress)
     return load_litert_model(command)
 
 
@@ -1823,10 +1496,6 @@ def close_engine():
     global engine_backend_name
     global engine_speculative_decoding
     global engine_runtime
-    global transformers_processor
-    global transformers_assistant_model
-    global transformers_torch
-    global transformers_mtp_enabled
     if engine is None:
         return
 
@@ -1844,15 +1513,6 @@ def close_engine():
     engine_backend_name = None
     engine_speculative_decoding = None
     engine_runtime = None
-    transformers_processor = None
-    transformers_assistant_model = None
-    transformers_mtp_enabled = False
-    if transformers_torch is not None and transformers_torch.cuda.is_available():
-        try:
-            transformers_torch.cuda.empty_cache()
-        except Exception:
-            pass
-    transformers_torch = None
 
 
 def reload_model_on_cpu(force=False):
@@ -1872,87 +1532,6 @@ def reload_model_on_cpu(force=False):
     return True
 
 
-def transformers_to_model_device(inputs):
-    dtype = getattr(engine, "dtype", None)
-    device = getattr(engine, "device", None)
-    if device is None and hasattr(engine, "hf_device_map"):
-        device = next(iter(getattr(engine, "hf_device_map", {}).values()), None)
-
-    try:
-        return inputs.to(device, dtype=dtype) if dtype is not None else inputs.to(device)
-    except Exception:
-        try:
-            return inputs.to(getattr(engine, "device"))
-        except Exception:
-            return inputs
-
-
-def transformers_generate(messages, max_new_tokens):
-    global transformers_static_cache_supported
-
-    if engine is None or transformers_processor is None or transformers_torch is None:
-        raise RuntimeError("Transformers Gemma model has not been loaded.")
-
-    inputs = transformers_processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    inputs = transformers_to_model_device(inputs)
-    input_len = inputs["input_ids"].shape[-1]
-    generate_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "do_sample": False,
-        "use_cache": True,
-    }
-    if transformers_static_cache_supported:
-        generate_kwargs["cache_implementation"] = "static"
-    if transformers_assistant_model is not None:
-        generate_kwargs["assistant_model"] = transformers_assistant_model
-
-    try:
-        with transformers_torch.inference_mode():
-            outputs = engine.generate(**inputs, **generate_kwargs)
-    except Exception:
-        if generate_kwargs.get("cache_implementation") != "static":
-            raise
-        transformers_static_cache_supported = False
-        generate_kwargs.pop("cache_implementation", None)
-        with transformers_torch.inference_mode():
-            outputs = engine.generate(**inputs, **generate_kwargs)
-
-    return transformers_processor.decode(outputs[0][input_len:], skip_special_tokens=True)
-
-
-def transformers_audio_messages(audio_path):
-    resolved_audio_path = str(Path(audio_path).resolve())
-    return [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": build_transcription_prompt()},
-                {"type": "audio", "path": resolved_audio_path},
-            ],
-        }
-    ]
-
-
-def transformers_text_messages(text):
-    return [
-        {
-            "role": "user",
-            "content": text,
-        }
-    ]
-
-
-def build_transformers_latex_workflow_prompt(transcript, current_row_latex=None):
-    current_row_latex = (current_row_latex or "").strip() or "(empty)"
-    return f"Current row LaTeX:\n{current_row_latex}\n\n{build_latex_workflow_prompt(transcript)}"
-
-
 def run_text_correction(correction, current_row_latex=None):
     prompt = build_text_correction_prompt(correction, current_row_latex)
     message = {
@@ -1965,10 +1544,7 @@ def run_text_correction(correction, current_row_latex=None):
         ],
     }
 
-    if engine_runtime == "transformers":
-        response = transformers_generate(transformers_text_messages(prompt), 256)
-    else:
-        response = send_text_correction_message(message)
+    response = send_text_correction_message(message)
 
     corrected_text = normalize_text_correction_result(response)
     if corrected_text is None:
@@ -1996,12 +1572,9 @@ def run_transcription(command):
 
     try:
         transcript_started = time.perf_counter()
-        if engine_runtime == "transformers":
-            transcript_response_text = transformers_generate(transformers_audio_messages(command["audioPath"]), 128)
-        else:
-            with engine.create_conversation(automatic_tool_calling=False) as conversation:
-                transcript_response = conversation.send_message(transcript_message)
-            transcript_response_text = response_text(transcript_response)
+        with engine.create_conversation(automatic_tool_calling=False) as conversation:
+            transcript_response = conversation.send_message(transcript_message)
+        transcript_response_text = response_text(transcript_response)
         log_timing("transcription-pass", transcript_started)
 
         transcript = normalize_transcription_result(transcript_response_text)
@@ -2035,15 +1608,7 @@ def run_transcription(command):
         }
 
         latex_started = time.perf_counter()
-        if engine_runtime == "transformers":
-            latex_response_text = transformers_generate(
-                transformers_text_messages(
-                    build_transformers_latex_workflow_prompt(transcript, command.get("currentRowLatex"))
-                ),
-                256,
-            )
-        else:
-            latex_response_text = send_latex_workflow_message(latex_message, command.get("currentRowLatex"))
+        latex_response_text = send_latex_workflow_message(latex_message, command.get("currentRowLatex"))
         log_timing("latex-pass", latex_started)
 
         latex_result = normalize_latex_workflow_result(latex_response_text)

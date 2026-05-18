@@ -15,12 +15,12 @@ if errorlevel 1 (
   exit /b %errorlevel%
 )
 
-echo [Eqoustics] Building self-contained Windows app folder and portable executable...
+echo [Eqoustics] Building self-contained Windows portable executable...
 call npm run build:all
 if errorlevel 1 (
   echo [Eqoustics] Build failed.
   exit /b %errorlevel%
 )
 
-echo [Eqoustics] Windows app folder and portable executable are in release\beta\^<version^>.
+echo [Eqoustics] Windows portable executable is in release\beta\^<version^>.
 endlocal

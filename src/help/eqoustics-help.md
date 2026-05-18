@@ -48,10 +48,8 @@ Open `Settings` from the menu bar to control application preferences.
 | Appearance | Sets the app theme. `Light` and `Dark` force a theme, while `System` follows the operating system preference. |
 | Gemma Model | Chooses the speech model size. `Gemma 2B` is the default recommendation for most computers; `Gemma 4B` may improve recognition but can need more memory and load time. |
 | Acceleration | Chooses where speech inference runs. `GPU` uses graphics hardware when supported; `CPU` uses the processor and is useful when GPU support is unavailable or unstable. |
-| Inference runtime | Chooses the speech inference engine. `LiteRT` is the default and uses the local LiteRT model package; `Transformers` uses Hugging Face Gemma checkpoints. |
-| Transformers MTP | Appears only when `Transformers` is selected. `On` enables the Gemma assistant drafter model for speculative decoding; `Off` loads only the main Transformers model. |
 
-Changing the Gemma model, acceleration, inference runtime, or Transformers MTP can require an app restart before the new speech settings are used.
+Changing the Gemma model or acceleration can require an app restart before the new speech settings are used.
 
 ## Microphone
 
@@ -59,7 +57,7 @@ The floating microphone window controls speech recognition. Click the microphone
 
 When Eqoustics starts, it loads the selected Gemma model before speech transcription is ready. This can take some time, so the microphone may show a loading state before it can listen.
 
-The first time Eqoustics starts, or after changing the Gemma model, acceleration, inference runtime, or Transformers MTP setting, the selected model may need to download before it can load. While a download is running, Eqoustics shows a small status in the bottom-right corner with the download progress. Wait for the download and model loading to finish before starting speech transcription.
+The first time Eqoustics starts, or after changing the Gemma model or acceleration setting, the selected LiteRT model may need to download before it can load. While a download is running, Eqoustics shows a small status in the bottom-right corner with the download progress. Wait for the download and model loading to finish before starting speech transcription.
 
 ## Speech commands
 

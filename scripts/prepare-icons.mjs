@@ -149,8 +149,8 @@ function writePortableSplash(sourcePath) {
       $graphics.FillRectangle($accentBrush, 0, 0, 8, $height)
       $graphics.DrawImage($icon, 42, 54, 96, 96)
       $graphics.DrawString('Starting Eqoustics', $titleFont, $titleBrush, 164, 64)
-      $graphics.DrawString('Extracting the embedded Python runtime...', $bodyFont, $bodyBrush, 166, 112)
-      $graphics.DrawString('This can take a minute on first launch.', $bodyFont, $bodyBrush, 166, 138)
+      $graphics.DrawString('Preparing the portable app...', $bodyFont, $bodyBrush, 166, 112)
+      $graphics.DrawString('The editor will open automatically.', $bodyFont, $bodyBrush, 166, 138)
       $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
     } finally {
       $accentBrush.Dispose()
