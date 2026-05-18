@@ -48,12 +48,18 @@ For a fast first run, use the bundled sample notebook and manual:
 
 After launching Eqoustics, open the demo notebook to see a ready-made document with example math content. Use the manual alongside it for a walkthrough of the editor, toolbar, file workflow, and speech controls.
 
-### Option 1: Run the Windows Portable App
+### Option 1: Download the Windows Portable App
 
-The easiest way to test Eqoustics is to run the Windows portable executable from the beta release folder:
+The simplest way to get started is to download the latest Windows portable binary from the GitHub releases page:
+
+[srivatsshankar/eqoustics releases](https://github.com/srivatsshankar/eqoustics/releases)
+
+Download the `Eqoustics-Beta-Windows-Portable-<version>.exe` file and run it directly. No separate installer or Python setup is required.
+
+If you built the app locally, the portable executable is written to:
 
 ```text
-release/beta/0.0.0-beta.0/Eqoustics-Beta-Windows-Portable-0.0.0-beta.0.exe
+release/beta/<version>/Eqoustics-Beta-Windows-Portable-<version>.exe
 ```
 
 The portable launcher is silent. On first launch it caches the bundled app files in the Windows temp directory, then later launches reuse that cache and open directly from the same single executable.

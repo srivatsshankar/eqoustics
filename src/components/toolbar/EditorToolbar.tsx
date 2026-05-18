@@ -39,6 +39,7 @@ import helpMarkdown from '../../help/eqoustics-help.md?raw'
 import { LATEX_COMMAND_PREVIEWS } from '../../shared/latexCommandPreviews'
 import type { RecentFileEntry } from '../../shared/types/notebook'
 import type { AppSettingsPayload, AppSettingsUpdatePayload, SpeechCommandInfo } from '../../shared/ipc/channels'
+import packageMetadata from '../../../package.json'
 
 interface EditorToolbarProps {
   hasActiveCell: boolean
@@ -2715,6 +2716,13 @@ export function EditorToolbar({
             <div className="file-menu-empty">No recent files</div>
           )}
         </div>
+        <div className="menu-divider" />
+        <section className="file-menu-about" aria-label="About Eqoustics">
+          <div className="file-menu-section-label">About</div>
+          <div className="file-menu-about-title">Eqoustics</div>
+          <div className="file-menu-about-line">Version {packageMetadata.version}</div>
+          <div className="file-menu-about-line">Copyright (c) 2026 Srivats Shankar</div>
+        </section>
       </div>
       <div className={`file-menu-drawer edit-menu-drawer${isEditMenuOpen ? ' file-menu-drawer-open' : ''}`} role="menu" aria-label="Edit">
         <button type="button" className="file-menu-item" role="menuitem" disabled={!canUndo} onClick={() => executeEditAction(onUndo)}>

@@ -377,6 +377,25 @@
   font-size: 0.78rem;
 }
 
+.file-menu-about {
+  margin-top: auto;
+  padding-top: 0.2rem;
+}
+
+.file-menu-about-title {
+  padding: 0 0.5rem 0.16rem;
+  color: #111827;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.file-menu-about-line {
+  padding: 0.03rem 0.5rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .help-menu-drawer {
   width: min(34rem, 100vw);
 }
@@ -3290,6 +3309,7 @@ sub.math-script {
 :root[data-appearance='dark'] .file-menu-item,
 :root[data-appearance='dark'] .settings-menu-heading,
 :root[data-appearance='dark'] .file-menu-recent-title,
+:root[data-appearance='dark'] .file-menu-about-title,
 :root[data-appearance='dark'] .speech-command-summary,
 :root[data-appearance='dark'] .speech-window-drag-handle,
 :root[data-appearance='dark'] .speech-window-mic-button,
@@ -3499,6 +3519,7 @@ sub.math-script {
 }
 
 :root[data-appearance='dark'] .file-menu-recent-path,
+:root[data-appearance='dark'] .file-menu-about-line,
 :root[data-appearance='dark'] .speech-command-details,
 :root[data-appearance='dark'] .speech-command-summary svg,
 :root[data-appearance='dark'] .speech-command-alias,

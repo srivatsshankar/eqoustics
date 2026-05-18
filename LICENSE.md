@@ -14,3 +14,7 @@ Under the following terms:
 - **Attribution** — You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
 
 Full license text: https://creativecommons.org/licenses/by/4.0/legalcode
+
+Third-party software included with Eqoustics may be distributed under different
+licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency
+notices and license links.
