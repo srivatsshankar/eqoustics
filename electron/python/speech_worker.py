@@ -344,7 +344,8 @@ Do not return JSON, Markdown, labels, LaTeX, explanations, apologies, or anythin
 """.strip()
 
 
-def build_latex_workflow_prompt(transcript):
+def build_latex_workflow_prompt(transcript, current_row_latex=None):
+    current_row_latex = (current_row_latex or "").strip() or "(empty)"
     return ("""
 Convert the transcript to an Eqoustics editor action.
 Return exactly:
@@ -356,14 +357,20 @@ Rules:
 - This is a math editor. Treat math dictation as LaTeX, not prose.
 - Default to LaTeX for any transcript that can reasonably be interpreted as symbolic, mathematical, or notation-like.
 - Never return NO_LATEX for variables, numbers with operators, equations, fractions, powers, roots, integrals, sums, matrices, Greek letters, sets, logic, or speech operator phrases.
-- Use REPLACE_ROW for corrections/edits/removals/replacements of the current row. Call get_current_row_latex first, then return the full corrected row.
-- For context-dependent insertions like continue, append, complete, or insert after the current expression, call get_current_row_latex first.
+- Use REPLACE_ROW for corrections/edits/removals/replacements of the current row. LATEX must be the full row after the change, including unchanged content from the current row.
+- Never use REPLACE_ROW with only the corrected fragment, replacement term, or words after a correction prefix.
+- "correction", "correct", "edit", and "fix" are correction prefixes. Use the words after the prefix as the requested change, but do not include the prefix in LATEX.
+- If the transcript is only a correction prefix or the requested change is unclear, return ACTION: INSERT and LATEX: NO_LATEX.
+- For context-dependent insertions like continue, append, complete, or insert after the current expression, use the current row before deciding the action.
 - For standalone math dictation, do not call tools; convert directly to LaTeX.
 - Mathematical speech returns raw LaTeX only, without $, $$, \\[, \\], \\(, or \\).
 - Preserve spoken relation operators. "equals", "equal to", "equals sign", and "literal symbol equals" must produce = in the matching location.
 - Preserve normal spoken math operators instead of omitting them or replacing them with plain words. Use standard LaTeX notation such as +, -, \\times, \\div, /, <, >, \\leq, \\geq, \\neq, \\approx, \\pm, \\cdot, \\in, \\subset, \\cup, \\cap, and \\rightarrow when the transcript calls for them.
 - Only plain non-math prose returns LATEX: NO_LATEX. Do not wrap prose in \\text{}.
 - Matrices use standard LaTeX environments, \\\\ row separators, and & cells.
+
+Current row LaTeX:
+""" + current_row_latex + """
 
 Examples:
 
@@ -1276,7 +1283,7 @@ def lookup_command_action(transcript, db_path, current_row_latex=None):
                 text = capitalize_spoken_plain_text(match.get("text", ""), current_row_latex)
                 return {"type": "insert", "insertMode": "text", "text": text}
             if command["command"] == "correction":
-                return None
+                return {"type": "ignore"}
 
             action = {"type": "command", "command": command["command"]}
             action.update(match)
@@ -1586,6 +1593,10 @@ def run_transcription(command):
         command_action = lookup_command_action(transcript, command_database_path(command), command.get("currentRowLatex"))
         log_timing("command-lookup", command_started)
         if command_action:
+            if command_action.get("type") == "ignore":
+                result_label = "ignore:command"
+                return {"transcript": transcript, "action": command_action}
+
             if command_action.get("type") == "type-correction":
                 correction_started = time.perf_counter()
                 corrected_latex = run_text_correction(command_action.get("text"), command.get("currentRowLatex"))
@@ -1602,7 +1613,7 @@ def run_transcription(command):
             "content": [
                 {
                     "type": "text",
-                    "text": build_latex_workflow_prompt(transcript),
+                    "text": build_latex_workflow_prompt(transcript, command.get("currentRowLatex")),
                 },
             ],
         }
